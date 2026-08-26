@@ -1,22 +1,23 @@
 import { beforeEach, describe, expect, it } from 'bun:test';
 import { __resetEnvCacheForTests, loadEnv } from '../../../src/shared/env';
-import { createLogger } from '../../../src/shared/logger';
+import { __resetLoggerCacheForTests, createLogger } from '../../../src/shared/logger';
 
 /**
- * Integration test: verifies env validation and the logger factory cooperate
- * correctly end-to-end (env drives logger configuration), rather than testing
- * either module in isolation.
+ * Integration test: verifies that validating the app env and creating a
+ * logger both work together during CLI startup, without one module
+ * accidentally requiring the other's configuration (see §2 ACL boundary —
+ * `shared/logger.ts` is intentionally decoupled from `shared/env.ts`).
  */
 describe('shared/env + shared/logger integration', () => {
   beforeEach(() => {
     __resetEnvCacheForTests();
+    __resetLoggerCacheForTests();
   });
 
-  it('boots a logger driven by validated env vars', () => {
-    const env = loadEnv({ LOG_LEVEL: 'debug', LOG_PRETTY: 'false' });
+  it('boots a logger independently of app-specific env validation', () => {
+    const env = loadEnv({ NODE_ENV: 'test' });
 
-    expect(env.LOG_LEVEL).toBe('debug');
-    expect(env.LOG_PRETTY).toBe(false);
+    expect(env.NODE_ENV).toBe('test');
 
     const logger = createLogger('integration-test');
     expect(() => logger.info('cli boot sequence check')).not.toThrow();

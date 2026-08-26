@@ -8,21 +8,7 @@
  */
 import { z } from 'zod';
 
-/**
- * `z.coerce.boolean()` is a footgun: it runs `Boolean(value)`, so the string
- * "false" (being non-empty) coerces to `true`. This helper parses common
- * boolean-ish env var spellings explicitly instead.
- */
-const booleanFromEnv = (defaultValue: boolean) =>
-  z.preprocess((value) => {
-    if (typeof value === 'boolean') return value;
-    if (typeof value === 'string') return ['true', '1', 'yes'].includes(value.toLowerCase());
-    return defaultValue;
-  }, z.boolean().default(defaultValue));
-
 const envSchema = z.object({
-  LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
-  LOG_PRETTY: booleanFromEnv(true),
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
 });
 
