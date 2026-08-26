@@ -10,6 +10,8 @@ import { z } from 'zod';
 
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  DELTIX_SERVER_URL: z.string().url().default('http://127.0.0.1:9090'),
+  DELTIX_CREDENTIALS_PATH: z.string().min(1).optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;
