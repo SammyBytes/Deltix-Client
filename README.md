@@ -26,8 +26,9 @@ Modular monolith organized by **bounded contexts** under `src/contexts/*` (no cl
 layering). See [`.github/copilot-instructions.md`](./.github/copilot-instructions.md) for the
 full set of engineering rules (architecture, security, licensing, testing, logging).
 
-Current contexts (placeholders until their roadmap phase lands): `session`, `binary-manager`,
-`mysql-embedded`, `dataflow`, `heartbeat`.
+Current contexts: `session` (implemented, Fase 2 — `deltix login`/`deltix logout`/`deltix whoami`),
+`binary-manager`, `mysql-embedded`, `dataflow`, `heartbeat` (placeholders until their roadmap
+phase lands).
 
 ## Development
 
