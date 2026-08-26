@@ -14,6 +14,12 @@ function fakeAdapter(overrides: Partial<AuthApiAdapter> = {}): AuthApiAdapter {
     login: async () => ({ accessToken: 'a.b.c', refreshToken: 'r1', expiresInSeconds: 900 }),
     logout: async () => undefined,
     keepAlive: async () => undefined,
+    refresh: async () => ({
+      accessToken: 'new-access-token',
+      refreshToken: 'r1',
+      expiresInSeconds: 900,
+      username: 'alice',
+    }),
     ...overrides,
   } as AuthApiAdapter;
 }
@@ -82,6 +88,57 @@ describe('session/session.service (unit, fake adapter + real credentials file)',
     await service.login('alice', 's3cret');
     await expect(service.logout()).rejects.toThrow('server unreachable');
     expect(await service.status()).toEqual({ loggedIn: false });
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('mintAccessToken() refreshes and returns a fresh access token', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'deltix-session-'));
+    const adapter = fakeAdapter({
+      refresh: async (token: string) => ({
+        accessToken: `access-for-${token}`,
+        refreshToken: 'r2',
+        expiresInSeconds: 900,
+        username: 'alice',
+      }),
+    });
+    const service = new SessionService(adapter, join(dir, 'credentials.json'));
+
+    await service.login('alice', 's3cret');
+    const accessToken = await service.mintAccessToken();
+
+    expect(accessToken).toBe('access-for-r1');
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('mintAccessToken() persists a rotated refresh token so subsequent calls keep working', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'deltix-session-'));
+    let refreshCallCount = 0;
+    const adapter = fakeAdapter({
+      refresh: async (token: string) => {
+        refreshCallCount += 1;
+        return {
+          accessToken: `access-${refreshCallCount}`,
+          refreshToken: `rotated-${refreshCallCount}`,
+          expiresInSeconds: 900,
+          username: 'alice',
+        };
+      },
+    });
+    const service = new SessionService(adapter, join(dir, 'credentials.json'));
+
+    await service.login('alice', 's3cret');
+    await service.mintAccessToken();
+    await service.mintAccessToken();
+
+    expect(refreshCallCount).toBe(2);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('mintAccessToken() throws NoActiveSessionError when not logged in', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'deltix-session-'));
+    const service = new SessionService(fakeAdapter(), join(dir, 'credentials.json'));
+
+    await expect(service.mintAccessToken()).rejects.toThrow(NoActiveSessionError);
     await rm(dir, { recursive: true, force: true });
   });
 });
