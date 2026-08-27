@@ -164,3 +164,13 @@ Currently vetted dependencies (0 known vulnerabilities as of introduction):
 - Roadmap: (1) Cryptography & Licensing is server-only — this repo starts contributing from
   (2) REST Control Plane & Auth (session login/logout) → (3) Ephemeral Tickets & gRPC data flow
   + heartbeat → (4)/(5) follow the server's Add-on/packaging phases as needed on the client side.
+
+## 13. CHANGELOG conventions
+
+- Every release entry starts with a short **"In plain terms:"** summary in everyday language —
+  written so someone with no engineering background can understand what changed and why it
+  matters, before any technical detail follows.
+- Keep the plain-language summary to 2-4 sentences, no jargon, no code identifiers.
+- Technical detail still follows below it, under the normal Keep a Changelog sections
+  (`### Added`/`### Fixed`/etc.) — the plain summary supplements the technical detail, it never
+  replaces it.

@@ -5,7 +5,15 @@ All notable changes to Deltix-Client are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+Each entry starts with a **plain-language summary** (what changed, in
+everyday words) before any technical detail — written so someone outside
+engineering can understand what shipped and why it matters.
+
 ## [0.2.4] - 2026-08-27
+
+**In plain terms:** added a simple way to check "what version am I
+running?" — type `deltix version` and it shows both the CLI's version and
+the server's version side by side.
 
 ### Added
 
