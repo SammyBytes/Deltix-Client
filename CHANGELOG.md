@@ -5,6 +5,26 @@ All notable changes to Deltix-Client are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-08-27
+
+### Fixed
+
+- **Critical: compiled binary crash on default settings.** `pino`'s
+  `transport: { target: 'pino-pretty' }` resolves the target module by string
+  in a worker thread at runtime, which fails inside a `bun build --compile`
+  binary (no `node_modules` on disk to resolve against) — the CLI crashed
+  immediately with `"unable to determine transport target for pino-pretty"`
+  unless `LOG_PRETTY=false` was set. Fixed by passing a `pino-pretty` stream
+  directly to `pino()` instead of using `transport`; `pino-pretty` moved from
+  `devDependencies` to a real runtime `dependency`.
+
+### Added
+
+- `deltix repo create|list|get` CLI commands — previously the `versioning`
+  service supported repo provisioning but no CLI command exposed it, so a
+  user could never actually provision a repo from the client (a prerequisite
+  for push/pull to work at all).
+
 ## [0.2.0] - 2026-08-27
 
 ### Added
