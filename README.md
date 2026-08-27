@@ -12,7 +12,8 @@ Developer CLI for **Deltix** — Git-style version control for relational databa
 
 Deltix-Client is a lightweight Bun/TypeScript CLI that:
 - Provides intuitive terminal commands (`deltix login`, `deltix logout`, `deltix whoami`,
-  `deltix push`, `deltix pull`, ...).
+  `deltix push`, `deltix pull`, `deltix branch ...`, `deltix merge`, `deltix log`, `deltix diff`,
+  `deltix roles ...`, `deltix sync-prefs ...`).
 - Authenticates against the Deltix-Server REST API to obtain a short-lived (2 minute TTL) gRPC
   transfer ticket.
 - Streams data fragments to the server's local staging area over mTLS gRPC and reports transfer
@@ -38,7 +39,44 @@ Contexts:
 - `session`: `deltix login`/`logout`/`whoami`, local credential storage, JWT refresh handling.
 - `dataflow`, `heartbeat`: gRPC Push/Pull client + keep-alive against the Deltix-Server transfer
   engine.
+- `versioning`: Fase 5 REST API parity for repo provisioning, branches, merge, log/diff, roles,
+  and sync preferences.
 - `binary-manager`, `mysql-embedded`: placeholders reserved for a future roadmap phase.
+
+
+## CLI usage
+
+Versioning parity with Deltix-Server Fase 5 is now available from the client CLI.
+
+```bash
+deltix branch list <repo>
+deltix branch create <repo> <name>
+deltix branch checkout <repo> <name>
+deltix branch delete <repo> <name>
+deltix branch current <repo>
+deltix merge <repo> <sourceBranch> [targetBranch]
+deltix log <repo> [--branch=name] [--limit=N]
+deltix diff <repo> <from> <to>
+deltix roles list <repo>
+deltix roles grant <repo> <username> <reader|writer|admin>
+deltix roles revoke <repo> <username>
+deltix sync-prefs get <repo>
+deltix sync-prefs set <repo> <schema-only|schema-and-data> [tables...]
+deltix sync-prefs dry-run <repo> [tables...]
+```
+
+Examples:
+
+```bash
+deltix branch create analytics feature/backfill
+deltix branch checkout analytics feature/backfill
+deltix log analytics --branch=feature/backfill --limit=10
+deltix diff analytics main feature/backfill
+deltix merge analytics feature/backfill
+deltix roles grant analytics bob writer
+deltix sync-prefs set analytics schema-only customers orders
+deltix sync-prefs dry-run analytics orders
+```
 
 ## Development
 
@@ -78,4 +116,4 @@ process (private, via GitHub Security Advisories), and this project's security b
 ## Testing philosophy
 
 TDD is mandatory: write the failing test first, then the minimal implementation, then refactor.
-No phase branch merges into `main` without unit, integration, and smoke tests passing.
+No phase branch merges into `main` without unit, integration, and smoke tests passing. Fase 5 client parity now covers the server's versioning REST surface for branching, merge, history, repo ACLs, and sync preferences.
