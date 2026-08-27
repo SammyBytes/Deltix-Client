@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { ConfigStore, defaultConfigPath } from '../contexts/config';
 /**
  * Deltix-Client CLI entrypoint.
  *
@@ -36,7 +37,7 @@ import {
   VersioningAuthenticationError,
 } from '../contexts/versioning';
 import { getClientBuildInfo } from '../shared/build-info';
-import { loadEnv } from '../shared/env';
+import { applyPersistedConfigDefaults, loadEnv } from '../shared/env';
 import {
   printError,
   printInfo,
@@ -44,6 +45,7 @@ import {
   printLines,
   printSuccess,
   printTable,
+  promptText,
 } from './output';
 
 async function runLogin(args: string[]): Promise<number> {
@@ -508,6 +510,61 @@ function handleDataflowError(err: unknown, action: string): number {
   return 1;
 }
 
+/**
+ * Interactive one-time connection setup. Persists to `~/.deltix/config.json`
+ * so a first-time user isn't left to discover `DELTIX_GRPC_*` env vars on
+ * their own — in particular `DELTIX_GRPC_TLS_SERVER_NAME_OVERRIDE`, which is
+ * required whenever the server is reached by IP address (Node's TLS stack
+ * rejects IP addresses as SNI ServerNames outright). Env vars, when set,
+ * still always take precedence over this persisted config (see
+ * shared/env.ts's `applyPersistedConfigDefaults`).
+ */
+async function runConfigure(): Promise<number> {
+  printInfo('Deltix connection setup (Ctrl+C to cancel; press Enter to keep the default)');
+
+  const serverUrl = await promptText('Deltix-Server REST URL', {
+    default: 'http://127.0.0.1:9090',
+  });
+  const grpcHost = await promptText('Deltix-Server gRPC host (hostname or IP)', {
+    default: '127.0.0.1',
+  });
+  const grpcPortRaw = await promptText('Deltix-Server gRPC port', { default: '50051' });
+  const grpcPort = Number.parseInt(grpcPortRaw, 10);
+
+  const isIpAddress = /^(\d{1,3}\.){3}\d{1,3}$|:/.test(grpcHost);
+  let grpcTlsServerNameOverride: string | undefined;
+  let grpcTlsCaPath: string | undefined;
+
+  if (isIpAddress) {
+    printInfo(
+      `"${grpcHost}" is an IP address. TLS requires a DNS-style server name for certificate ` +
+        'verification (SNI), so you must provide the name the server certificate was issued for.',
+    );
+    grpcTlsServerNameOverride = await promptText('TLS server name override', {
+      default: 'localhost',
+    });
+  }
+
+  const caPathAnswer = await promptText(
+    'Path to a CA certificate to trust (leave blank if the server uses a publicly-trusted certificate)',
+    { default: '' },
+  );
+  if (caPathAnswer.trim() !== '') grpcTlsCaPath = caPathAnswer.trim();
+
+  const store = new ConfigStore(defaultConfigPath);
+  await store.save({
+    serverUrl,
+    grpcHost,
+    grpcPort: Number.isFinite(grpcPort) ? grpcPort : undefined,
+    grpcTlsCaPath,
+    grpcTlsServerNameOverride,
+  });
+
+  printSuccess(`Configuration saved to ${defaultConfigPath}`);
+  printKeyValues({ serverUrl, grpcHost, grpcPort, grpcTlsCaPath, grpcTlsServerNameOverride });
+  return 0;
+}
+
 async function runVersion(): Promise<number> {
   const clientInfo = await getClientBuildInfo();
   printInfo('Deltix-Client');
@@ -550,6 +607,8 @@ export async function runCli(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
 
   switch (command) {
+    case 'configure':
+      return runConfigure();
     case 'version':
     case '--version':
     case '-v':
@@ -581,7 +640,8 @@ export async function runCli(argv: string[]): Promise<number> {
     default:
       printLines([
         'Deltix-Client versioning parity with Deltix-Server Fase 5',
-        'Usage: deltix <version|login|logout|whoami|push|pull|repo|branch|merge|log|diff|roles|sync-prefs> [...args]',
+        'Usage: deltix <version|configure|login|logout|whoami|push|pull|repo|branch|merge|log|diff|roles|sync-prefs> [...args]',
+        '  deltix configure',
         '  deltix repo create <repo>',
         '  deltix repo list',
         '  deltix repo get <repo>',
@@ -605,6 +665,8 @@ export async function runCli(argv: string[]): Promise<number> {
 }
 
 if (import.meta.main) {
+  const persisted = await new ConfigStore(defaultConfigPath).load();
+  if (persisted) applyPersistedConfigDefaults(persisted);
   const exitCode = await runCli(process.argv.slice(2));
   process.exit(exitCode);
 }

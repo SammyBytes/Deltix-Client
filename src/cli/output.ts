@@ -79,6 +79,15 @@ function formatValue(value: unknown): string {
   return String(value);
 }
 
+/** Prompts the user for free-text input (e.g. interactive `deltix configure`). */
+export async function promptText(
+  message: string,
+  opts: { default?: string } = {},
+): Promise<string> {
+  const answer = await consola.prompt(message, { type: 'text', default: opts.default });
+  return typeof answer === 'string' ? answer : (opts.default ?? '');
+}
+
 /** Prints the plain usage/help lines (no color coding needed here). */
 export function printLines(lines: string[]): void {
   for (const line of lines) consola.log(line);

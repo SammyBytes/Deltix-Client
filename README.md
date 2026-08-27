@@ -36,6 +36,7 @@ layering). See [`.github/copilot-instructions.md`](./.github/copilot-instruction
 full set of engineering rules (architecture, security, licensing, testing, logging).
 
 Contexts:
+- `config`: `deltix configure` interactive connection setup, persisted to `~/.deltix/config.json`.
 - `session`: `deltix login`/`logout`/`whoami`, local credential storage, JWT refresh handling.
 - `dataflow`, `heartbeat`: gRPC Push/Pull client + keep-alive against the Deltix-Server transfer
   engine.
@@ -46,7 +47,25 @@ Contexts:
 
 ## CLI usage
 
-Versioning parity with Deltix-Server Fase 5 is now available from the client CLI.
+### First-time setup
+
+Run `deltix configure` once to set up how the CLI reaches your Deltix-Server (REST URL, gRPC
+host/port, and TLS trust options), instead of hand-setting environment variables:
+
+```bash
+deltix configure
+```
+
+If your server is reached by IP address rather than a hostname (e.g. `10.1.10.129`), the
+prompt will ask for a TLS server name override — this avoids the
+`ERR_INVALID_ARG_VALUE: The property 'options.servername' ... is not permitted` crash that
+occurs because TLS's SNI mechanism doesn't allow IP addresses as server names. Use the same
+name the server's certificate was issued for (`localhost` if you generated it with
+Deltix-Server's `bun run tls:server-cert` script). Settings are saved to
+`~/.deltix/config.json` and act only as *defaults* — any `DELTIX_*` environment variable you
+set explicitly always takes precedence.
+
+### Versioning parity with Deltix-Server Fase 5
 
 ```bash
 deltix branch list <repo>

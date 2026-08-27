@@ -44,6 +44,34 @@ export function loadEnv(source: Record<string, string | undefined> = Bun.env): E
   return cachedEnv;
 }
 
+/**
+ * Applies persisted `deltix configure` defaults to `Bun.env` for any of the
+ * connection-related variables not already explicitly set. Env vars always
+ * win over persisted config — this only fills gaps. Must be called (once,
+ * at process startup, before the first `loadEnv()`) for persisted config to
+ * take effect, since `loadEnv()` caches its result on first call.
+ */
+export function applyPersistedConfigDefaults(config: {
+  serverUrl?: string;
+  grpcHost?: string;
+  grpcPort?: number;
+  grpcTlsCaPath?: string;
+  grpcTlsServerNameOverride?: string;
+}): void {
+  const fallback: Record<string, string | undefined> = {
+    DELTIX_SERVER_URL: config.serverUrl,
+    DELTIX_GRPC_HOST: config.grpcHost,
+    DELTIX_GRPC_PORT: config.grpcPort?.toString(),
+    DELTIX_GRPC_TLS_CA_PATH: config.grpcTlsCaPath,
+    DELTIX_GRPC_TLS_SERVER_NAME_OVERRIDE: config.grpcTlsServerNameOverride,
+  };
+  for (const [key, value] of Object.entries(fallback)) {
+    if (value !== undefined && Bun.env[key] === undefined) {
+      Bun.env[key] = value;
+    }
+  }
+}
+
 /** Test-only helper to reset the cache between test cases. */
 export function __resetEnvCacheForTests(): void {
   cachedEnv = undefined;

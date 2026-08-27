@@ -1,5 +1,9 @@
-import { beforeEach, describe, expect, it } from 'bun:test';
-import { __resetEnvCacheForTests, loadEnv } from '../../../src/shared/env';
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import {
+  __resetEnvCacheForTests,
+  applyPersistedConfigDefaults,
+  loadEnv,
+} from '../../../src/shared/env';
 
 describe('shared/env', () => {
   beforeEach(() => {
@@ -30,5 +34,51 @@ describe('shared/env', () => {
 
     expect(env.DELTIX_SERVER_URL).toBe('https://deltix.example.com');
     expect(env.DELTIX_CREDENTIALS_PATH).toBe('/tmp/creds.json');
+  });
+
+  describe('applyPersistedConfigDefaults', () => {
+    const savedEnv: Record<string, string | undefined> = {};
+
+    beforeEach(() => {
+      for (const key of [
+        'DELTIX_SERVER_URL',
+        'DELTIX_GRPC_HOST',
+        'DELTIX_GRPC_PORT',
+        'DELTIX_GRPC_TLS_CA_PATH',
+        'DELTIX_GRPC_TLS_SERVER_NAME_OVERRIDE',
+      ]) {
+        savedEnv[key] = Bun.env[key];
+        delete Bun.env[key];
+      }
+    });
+
+    afterEach(() => {
+      for (const [key, value] of Object.entries(savedEnv)) {
+        if (value === undefined) delete Bun.env[key];
+        else Bun.env[key] = value;
+      }
+    });
+
+    it('fills Bun.env from persisted config when unset', () => {
+      applyPersistedConfigDefaults({
+        serverUrl: 'https://10.1.10.129:9090',
+        grpcHost: '10.1.10.129',
+        grpcPort: 50051,
+        grpcTlsServerNameOverride: 'localhost',
+      });
+
+      expect(Bun.env.DELTIX_SERVER_URL).toBe('https://10.1.10.129:9090');
+      expect(Bun.env.DELTIX_GRPC_HOST).toBe('10.1.10.129');
+      expect(Bun.env.DELTIX_GRPC_PORT).toBe('50051');
+      expect(Bun.env.DELTIX_GRPC_TLS_SERVER_NAME_OVERRIDE).toBe('localhost');
+    });
+
+    it('never overrides an already-set env var (env vars always win)', () => {
+      Bun.env.DELTIX_GRPC_HOST = 'explicit-host';
+
+      applyPersistedConfigDefaults({ grpcHost: 'from-config' });
+
+      expect(Bun.env.DELTIX_GRPC_HOST).toBe('explicit-host');
+    });
   });
 });

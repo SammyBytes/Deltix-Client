@@ -9,6 +9,26 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.3.0] - 2026-08-27
+
+**In plain terms:** connecting to a server on a non-default machine used to
+require knowing which environment variables to set — including one that's
+easy to miss and causes a confusing crash (`servername ... IP address ...
+not permitted`) if your server is reached by IP rather than a name. There's
+now a guided setup command that asks the right questions and remembers your
+answers.
+
+### Added
+
+- **`deltix configure`**: a new interactive command that prompts for the
+  server's REST URL, gRPC host/port, and (when needed) TLS trust settings,
+  and saves them to `~/.deltix/config.json`. When the gRPC host looks like
+  an IP address, it explains why a TLS server name override is required and
+  prompts for it directly — this is the exact fix for the
+  `ERR_INVALID_ARG_VALUE`/SNI-on-IP-address crash reported in production.
+  Explicit environment variables still always take precedence over this
+  saved configuration.
+
 ## [0.2.4] - 2026-08-27
 
 **In plain terms:** added a simple way to check "what version am I
