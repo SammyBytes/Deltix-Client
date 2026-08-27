@@ -5,7 +5,29 @@ All notable changes to Deltix-Client are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-08-27
+
+### Fixed
+
+- **Critical: `push`/`pull` crashed with `ENOENT ... proto/transfer.proto` in the
+  compiled binary release.** The gRPC transfer client resolved the `.proto`
+  file via a source-tree-relative path (`join(import.meta.dir, '..', '..',
+  'proto', 'transfer.proto')`). `bun build --compile` only embeds JS/TS module
+  code automatically — it does not bundle arbitrary asset files referenced
+  this way — so the path only ever resolved when running via `bun run` from
+  inside the repository, and always failed when the compiled binary was run
+  from anywhere else (exactly what pilot users hit on Windows, e.g.
+  `B:/proto/transfer.proto`). Fixed by switching to Bun's
+  `import PROTO_PATH from '../../proto/transfer.proto' with { type: 'file' }`
+  syntax, which embeds the file into the binary at compile time and resolves
+  to a real path at runtime (including inside the compiled binary's virtual
+  filesystem). Added a regression smoke test that compiles a real binary and
+  runs a full login/push/pull round-trip from a clean directory with no
+  `proto/` folder on disk, to prevent this class of bug from silently
+  regressing again.
+
 ## [0.2.1] - 2026-08-27
+
 
 ### Fixed
 

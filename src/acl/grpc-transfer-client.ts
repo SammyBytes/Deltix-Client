@@ -15,11 +15,15 @@
  * self-signed dev/test certificate.
  */
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
-
-const PROTO_PATH = join(import.meta.dir, '..', '..', 'proto', 'transfer.proto');
+// Bun's `with { type: 'file' }` import embeds the referenced file into a
+// `bun build --compile` binary and resolves to a real on-disk path at
+// runtime (inside Bun's virtual `/$bunfs/` fs for compiled binaries, or the
+// real path during `bun run`/tests) -- a plain `join(import.meta.dir, ...)`
+// path only works in dev, since compiled binaries have no `node_modules`/
+// source tree on disk to resolve relative paths against.
+import PROTO_PATH from '../../proto/transfer.proto' with { type: 'file' };
 
 export interface GrpcClientTlsConfig {
   caCertPath?: string | undefined;
