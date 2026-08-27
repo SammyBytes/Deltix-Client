@@ -1,0 +1,91 @@
+name: Release (cross-platform binaries + container image)
+
+# Deltix-Client is a CLI: the primary distribution is a compiled binary per
+# OS/arch attached to a GitHub Release, not a running container. A GHCR
+# image is published too for automation use cases (CI pipelines running
+# `deltix push`/`pull` from inside a container).
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  test:
+    uses: ./.github/workflows/ci.yml
+
+  build-binaries:
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - { bun: bun-linux-x64, name: deltix-linux-x64 }
+          - { bun: bun-linux-arm64, name: deltix-linux-arm64 }
+          - { bun: bun-darwin-x64, name: deltix-darwin-x64 }
+          - { bun: bun-darwin-arm64, name: deltix-darwin-arm64 }
+          - { bun: bun-windows-x64, name: deltix-windows-x64.exe }
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      - name: Compile ${{ matrix.target.name }}
+        run: bun build ./src/cli/index.ts --compile --target=${{ matrix.target.bun }} --outfile dist/${{ matrix.target.name }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target.name }}
+          path: dist/${{ matrix.target.name }}
+          if-no-files-found: error
+
+  publish-release:
+    needs: build-binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+
+  build-and-push-image:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/deltix-client
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=sha
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
