@@ -1,0 +1,7 @@
+* @SammyBytes
+
+# Session/credential handling is the most security-sensitive part of the CLI.
+/src/contexts/session/ @SammyBytes
+
+/.github/workflows/ @SammyBytes
+/Dockerfile @SammyBytes
