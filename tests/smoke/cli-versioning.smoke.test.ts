@@ -81,6 +81,10 @@ describe.if(serverAvailable)('cli versioning smoke test', () => {
 
   it('runs CLI versioning commands against the real server', async () => {
     expect(await runCli(['login', 'alice', 's3cret-pass'])).toBe(0);
+    expect(await runCli(['repo', 'create', 'smoke-repo'])).toBe(0);
+    expect(await runCli(['repo', 'list'])).toBe(0);
+    expect(await runCli(['repo', 'get', 'smoke-repo'])).toBe(0);
+    expect(await runCli(['repo', 'get', 'missing-repo'])).toBe(1);
     expect(await runCli(['branch', 'list', 'missing-repo'])).toBe(1);
     expect(await runCli(['logout'])).toBe(0);
   }, 30000);

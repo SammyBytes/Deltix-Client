@@ -230,6 +230,44 @@ async function runBranch(args: string[]): Promise<number> {
   }
 }
 
+async function runRepo(args: string[]): Promise<number> {
+  const [action, repoArg] = args;
+  if (!action) {
+    logger.error('Usage: deltix repo <create|list|get> [repo]');
+    return 1;
+  }
+
+  try {
+    const service = createVersioningService();
+    switch (action) {
+      case 'create': {
+        const repo = requireRepo(repoArg, 'Usage: deltix repo create <repo>');
+        if (!repo) return 1;
+        const created = await service.createRepo(repo);
+        logger.info({ repo: created }, 'Repo created');
+        return 0;
+      }
+      case 'list': {
+        const repos = await service.listRepos();
+        logger.info({ repos }, 'Repo list');
+        return 0;
+      }
+      case 'get': {
+        const repo = requireRepo(repoArg, 'Usage: deltix repo get <repo>');
+        if (!repo) return 1;
+        const found = await service.getRepo(repo);
+        logger.info({ repo: found }, 'Repo details');
+        return 0;
+      }
+      default:
+        logger.error('Usage: deltix repo <create|list|get> [repo]');
+        return 1;
+    }
+  } catch (err) {
+    return handleVersioningError(err, 'Repo command failed');
+  }
+}
+
 async function runMerge(args: string[]): Promise<number> {
   const [repo, sourceBranch, targetBranch] = args;
   if (!repo || !sourceBranch) {
@@ -450,6 +488,8 @@ export async function runCli(argv: string[]): Promise<number> {
       return runPush(rest);
     case 'pull':
       return runPull(rest);
+    case 'repo':
+      return runRepo(rest);
     case 'branch':
       return runBranch(rest);
     case 'merge':
@@ -465,8 +505,11 @@ export async function runCli(argv: string[]): Promise<number> {
     default:
       logger.info('Deltix-Client versioning parity with Deltix-Server Fase 5');
       logger.info(
-        'Usage: deltix <login|logout|whoami|push|pull|branch|merge|log|diff|roles|sync-prefs> [...args]',
+        'Usage: deltix <login|logout|whoami|push|pull|repo|branch|merge|log|diff|roles|sync-prefs> [...args]',
       );
+      logger.info('  deltix repo create <repo>');
+      logger.info('  deltix repo list');
+      logger.info('  deltix repo get <repo>');
       logger.info('  deltix branch list <repo>');
       logger.info('  deltix branch create <repo> <name>');
       logger.info('  deltix branch checkout <repo> <name>');
