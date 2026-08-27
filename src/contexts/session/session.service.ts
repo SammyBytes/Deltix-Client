@@ -52,6 +52,29 @@ export class SessionService {
     await this.authApi.keepAlive(credentials.refreshToken);
   }
 
+  /**
+   * Mints a fresh short-lived access token from the stored refresh token,
+   * for use by other contexts (e.g. `dataflow`) that need to authenticate
+   * a single REST call (ticket issuance) without the CLI ever persisting
+   * an access token to disk.
+   */
+  async mintAccessToken(): Promise<string> {
+    const credentials = await this.credentialsStore.load();
+    if (!credentials) {
+      throw new NoActiveSessionError();
+    }
+    const result = await this.authApi.refresh(credentials.refreshToken);
+    // The server may rotate the refresh token on `/refresh`; always persist
+    // whatever it returns so the next call keeps working even if rotation
+    // is introduced later (defense against silently invalidating the local
+    // session).
+    await this.credentialsStore.save({
+      refreshToken: result.refreshToken,
+      username: result.username,
+    });
+    return result.accessToken;
+  }
+
   async status(): Promise<SessionStatus> {
     const credentials = await this.credentialsStore.load();
     if (!credentials) {

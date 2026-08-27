@@ -34,6 +34,7 @@ describe.if(serverAvailable)(
     let credentialsPath: string;
     let httpPort: number;
     let serverProc: ReturnType<typeof Bun.spawn>;
+    let tlsDir: string;
 
     beforeAll(async () => {
       repoPath = await initTempDoltRepo();
@@ -57,6 +58,17 @@ describe.if(serverAvailable)(
         { username: 'alice', passwordHash: await hashPassword('s3cret-pass') },
       ]);
 
+      // The server always requires TLS credentials to boot its gRPC transfer
+      // engine (no plaintext code path) — generate a throwaway self-signed
+      // cert reusing the server repo's own test fixture (black-box, via its
+      // public test-fixtures file, never its source internals).
+      const { generateSelfSignedCert } = await import(
+        join(SERVER_REPO_PATH, 'tests', 'fixtures', 'tls-fixtures.ts')
+      );
+      tlsDir = await mkdtemp(join(tmpdir(), 'deltix-cli-smoke-tls-'));
+      const { certPath, keyPath } = await generateSelfSignedCert(tlsDir);
+      const grpcPort = 26000 + Math.floor(Math.random() * 4000);
+
       serverProc = Bun.spawn(['bun', 'run', SERVER_ENTRYPOINT], {
         cwd: SERVER_REPO_PATH,
         env: {
@@ -69,6 +81,9 @@ describe.if(serverAvailable)(
           DELTIX_JWT_PUBLIC_KEY: jwtPublicKeyPem,
           DELTIX_LOCAL_USERS: localUsers,
           DELTIX_SESSION_DB_PATH: join(repoPath, '..', 'sessions.db'),
+          DELTIX_GRPC_PORT: String(grpcPort),
+          DELTIX_GRPC_TLS_CERT_PATH: certPath,
+          DELTIX_GRPC_TLS_KEY_PATH: keyPath,
           HTTP_PORT: String(httpPort),
           LOG_PRETTY: 'false',
         },
@@ -76,12 +91,13 @@ describe.if(serverAvailable)(
         stderr: 'pipe',
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 800));
+      await new Promise((resolve) => setTimeout(resolve, 1200));
     });
 
     afterAll(async () => {
       serverProc.kill();
       await rm(repoPath, { recursive: true, force: true });
+      await rm(tlsDir, { recursive: true, force: true });
     });
 
     it('logs in, reports whoami, then logs out via the real CLI + real server', async () => {
