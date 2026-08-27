@@ -84,6 +84,33 @@ describe.if(serverAvailable)(
       const { certPath, keyPath } = await generateSelfSignedCert(workDir);
       caCertPath = certPath;
 
+      // Repo RBAC is enforced at ticket-issuance time on the server
+      // (transfer.router.ts): a caller needs `writer` for push. Seed alice
+      // as a real user row (FK target for repo_roles) with admin on the
+      // repo this test exercises, since DELTIX_LOCAL_USERS carries no repo
+      // roles.
+      const userDbPath = join(workDir, 'users.db');
+      const { LibsqlUserStore } = await import(
+        join(SERVER_REPO_PATH, 'src', 'contexts', 'auth', 'libsql-user-store.ts')
+      );
+      const userStore = new LibsqlUserStore(userDbPath);
+      await userStore.init();
+      await userStore.create({
+        username: 'alice',
+        passwordHash: await hashPassword('s3cret-pass'),
+        createdAt: Date.now(),
+        createdBy: 'test-seed',
+        active: true,
+        lastLoginAt: null,
+      });
+      await userStore.upsertRepoRole({
+        username: 'alice',
+        repoId: 'org/compiled-binary-smoke-repo',
+        role: 'admin',
+        grantedAt: Date.now(),
+        grantedBy: 'test-seed',
+      });
+
       serverProc = Bun.spawn(['bun', 'run', SERVER_ENTRYPOINT], {
         cwd: SERVER_REPO_PATH,
         env: {
@@ -95,6 +122,7 @@ describe.if(serverAvailable)(
           DELTIX_JWT_PRIVATE_KEY: jwtPrivateKeyPem,
           DELTIX_JWT_PUBLIC_KEY: jwtPublicKeyPem,
           DELTIX_LOCAL_USERS: localUsers,
+          DELTIX_USER_DB_PATH: userDbPath,
           DELTIX_SESSION_DB_PATH: join(workDir, 'sessions.db'),
           DELTIX_TICKET_DB_PATH: join(workDir, 'tickets.db'),
           DELTIX_TRANSFER_JOB_DB_PATH: join(workDir, 'transfer-jobs.db'),

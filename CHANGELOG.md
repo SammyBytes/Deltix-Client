@@ -5,6 +5,35 @@ All notable changes to Deltix-Client are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] - 2026-08-27
+
+### Changed
+
+- **Command output is now human-readable instead of raw JSON log lines.**
+  Every CLI command previously routed its result through the Pino
+  structured logger, so a normal `deltix repo list` or `deltix log` printed
+  a raw `{"level":30,...}` JSON blob — technically correct but unusable for
+  a human typing commands interactively. Added `src/cli/output.ts` (built on
+  `consola`) with `printSuccess`/`printInfo`/`printError`/`printKeyValues`/
+  `printTable` helpers, and refactored all 12 CLI subcommands in
+  `src/cli/index.ts` to use it. Structured Pino logging (`shared/logger.ts`)
+  is unchanged and still available for any future diagnostic-only logging
+  need — this is purely a presentation-layer change with no effect on the
+  session/versioning/dataflow contexts or their public APIs.
+- Lists (`repo list`, `branch list`, `roles list`) now render as plain
+  aligned tables; single-record results (`repo get`, `sync-prefs get`)
+  render as `key: value` lines; success/failure now use clear
+  color-coded prefixes instead of a JSON `msg` field.
+
+### Fixed
+
+- **`sync-prefs dry-run` ignored the previously saved sync-preference
+  mode**, always forcing `schema_and_data` even when the repo had an
+  explicit `schema_only` preference stored — risking an unexpected
+  full-data dry-run preview against a repo intentionally configured for
+  schema-only sync. The command now reads the stored preference first and
+  only falls back to `schema_and_data` when nothing has been saved yet.
+
 ## [0.2.2] - 2026-08-27
 
 ### Fixed
