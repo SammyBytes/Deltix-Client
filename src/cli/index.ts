@@ -35,6 +35,8 @@ import {
   ValidationError,
   VersioningAuthenticationError,
 } from '../contexts/versioning';
+import { getClientBuildInfo } from '../shared/build-info';
+import { loadEnv } from '../shared/env';
 import {
   printError,
   printInfo,
@@ -506,10 +508,52 @@ function handleDataflowError(err: unknown, action: string): number {
   return 1;
 }
 
+async function runVersion(): Promise<number> {
+  const clientInfo = await getClientBuildInfo();
+  printInfo('Deltix-Client');
+  printKeyValues({
+    version: clientInfo.version,
+    commit: clientInfo.commit,
+  });
+
+  const env = loadEnv();
+  try {
+    const response = await fetch(new URL('/status', env.DELTIX_SERVER_URL), {
+      signal: AbortSignal.timeout(3000),
+    });
+    if (response.ok) {
+      const server = (await response.json()) as {
+        version?: string;
+        commit?: string;
+        nodeEnv?: string;
+      };
+      printInfo(`Deltix-Server (${env.DELTIX_SERVER_URL})`);
+      printKeyValues({
+        version: server.version ?? 'unknown',
+        commit: server.commit ?? 'unknown',
+        env: server.nodeEnv ?? 'unknown',
+      });
+    } else {
+      printInfo(`Deltix-Server (${env.DELTIX_SERVER_URL}): unreachable (HTTP ${response.status})`);
+    }
+  } catch {
+    // Version reporting must never fail the command outright just because
+    // the server happens to be unreachable — the client's own version is
+    // still valid, useful information on its own.
+    printInfo(`Deltix-Server (${env.DELTIX_SERVER_URL}): unreachable`);
+  }
+
+  return 0;
+}
+
 export async function runCli(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
 
   switch (command) {
+    case 'version':
+    case '--version':
+    case '-v':
+      return runVersion();
     case 'login':
       return runLogin(rest);
     case 'logout':
@@ -537,7 +581,7 @@ export async function runCli(argv: string[]): Promise<number> {
     default:
       printLines([
         'Deltix-Client versioning parity with Deltix-Server Fase 5',
-        'Usage: deltix <login|logout|whoami|push|pull|repo|branch|merge|log|diff|roles|sync-prefs> [...args]',
+        'Usage: deltix <version|login|logout|whoami|push|pull|repo|branch|merge|log|diff|roles|sync-prefs> [...args]',
         '  deltix repo create <repo>',
         '  deltix repo list',
         '  deltix repo get <repo>',

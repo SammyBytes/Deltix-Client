@@ -5,6 +5,22 @@ All notable changes to Deltix-Client are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.4] - 2026-08-27
+
+### Added
+
+- `deltix version` (aliases `--version`, `-v`): prints the client's own
+  version/commit, then best-effort queries the connected Deltix-Server's
+  `GET /status` for its version/commit/environment. Never fails the command
+  just because the server happens to be unreachable — the client's own
+  version is still reported, with an "unreachable" note for the server.
+
+### Tests
+
+- Added unit coverage for `getClientBuildInfo()`.
+- Extended the CLI session smoke test to cover `deltix version` against a
+  real running server and against an unreachable one.
+
 ## [0.2.3] - 2026-08-27
 
 ### Changed

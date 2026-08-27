@@ -127,5 +127,27 @@ describe.if(serverAvailable)(
       expect(exitCode).toBe(1);
       __resetEnvCacheForTests();
     });
+
+    it('reports client + server version/commit via `deltix version` against a real running server', async () => {
+      __resetEnvCacheForTests();
+      process.env.DELTIX_SERVER_URL = `http://127.0.0.1:${httpPort}`;
+      process.env.DELTIX_CREDENTIALS_PATH = credentialsPath;
+
+      const exitCode = await runCli(['version']);
+      expect(exitCode).toBe(0);
+
+      __resetEnvCacheForTests();
+    });
+
+    it('still exits 0 for `deltix version` when the server is unreachable', async () => {
+      __resetEnvCacheForTests();
+      process.env.DELTIX_SERVER_URL = 'http://127.0.0.1:1'; // guaranteed unreachable
+      process.env.DELTIX_CREDENTIALS_PATH = credentialsPath;
+
+      const exitCode = await runCli(['--version']);
+      expect(exitCode).toBe(0);
+
+      __resetEnvCacheForTests();
+    });
   },
 );
