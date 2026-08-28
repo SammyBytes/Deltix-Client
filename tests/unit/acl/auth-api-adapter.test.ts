@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it } from 'bun:test';
+import { rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { AuthApiAdapter } from '../../../src/acl/auth-api-adapter';
 import {
   InvalidCredentialsError,
@@ -11,6 +14,54 @@ describe('acl/auth-api-adapter (unit, mocked fetch)', () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+  });
+
+  it('login() passes no tls option when no CA cert is configured', async () => {
+    let capturedInit: RequestInit | undefined;
+    globalThis.fetch = (async (_url: string, init: RequestInit) => {
+      capturedInit = init;
+      return new Response(
+        JSON.stringify({ accessToken: 'a.b.c', refreshToken: 'r1', expiresInSeconds: 900 }),
+        { status: 200 },
+      );
+    }) as typeof fetch;
+
+    const adapter = new AuthApiAdapter('http://127.0.0.1:9090');
+    await adapter.login('alice', 's3cret');
+
+    expect(capturedInit).toBeDefined();
+    expect((capturedInit as unknown as { tls?: unknown }).tls).toBeUndefined();
+  });
+
+  it('login() forwards the configured CA cert as a tls option to fetch', async () => {
+    const dir = await import('node:fs/promises').then((m) =>
+      m.mkdtemp(join(tmpdir(), 'deltix-auth-tls-')),
+    );
+    const caPath = join(dir, 'ca.crt');
+    const CA_PEM = '-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n';
+    await writeFile(caPath, CA_PEM, 'utf8');
+
+    let capturedInit: RequestInit | undefined;
+    globalThis.fetch = (async (_url: string, init: RequestInit) => {
+      capturedInit = init;
+      return new Response(
+        JSON.stringify({ accessToken: 'a.b.c', refreshToken: 'r1', expiresInSeconds: 900 }),
+        { status: 200 },
+      );
+    }) as typeof fetch;
+
+    const adapter = new AuthApiAdapter('https://10.1.10.129:9090', {
+      caCertPath: caPath,
+      serverNameOverride: 'localhost',
+    });
+    await adapter.login('alice', 's3cret');
+
+    expect((capturedInit as unknown as { tls?: { ca: string; serverName: string } }).tls).toEqual({
+      ca: CA_PEM,
+      serverName: 'localhost',
+    });
+
+    await rm(dir, { recursive: true, force: true });
   });
 
   it('login() posts credentials and returns the parsed token payload on 200', async () => {

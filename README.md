@@ -65,6 +65,18 @@ Deltix-Server's `bun run tls:server-cert` script). Settings are saved to
 `~/.deltix/config.json` and act only as *defaults* — any `DELTIX_*` environment variable you
 set explicitly always takes precedence.
 
+**Self-signed server certificates**: if `deltix configure` detects an `https://` server URL, it
+offers to fetch the server's certificate automatically instead of requiring you to copy a
+`.crt` file off the server by hand (`scp`/`ssh cat`, which commonly hits path or `sudo`/TTY
+friction). This works the same way SSH handles host keys (Trust-On-First-Use): the CLI connects,
+shows the certificate's SHA-256 fingerprint and subject/issuer, and only trusts it after you
+explicitly confirm the fingerprint matches what the server operator shared with you (e.g. from
+`install.sh`'s summary output). The confirmed certificate is saved to
+`~/.deltix/trusted-server.crt` and reused for **both** the REST API and the gRPC transfer engine
+— in a typical deployment both present the same certificate, so you only do this once. Decline
+the auto-fetch (or answer "no" to the trust prompt) to fall back to entering a `.crt` path
+manually.
+
 ### Versioning parity with Deltix-Server Fase 5
 
 ```bash

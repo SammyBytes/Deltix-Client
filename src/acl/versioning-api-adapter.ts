@@ -14,6 +14,7 @@ import {
   VersioningAuthenticationError,
   VersioningRequestError,
 } from '../contexts/versioning/errors';
+import { buildFetchTlsOptions, type HttpTlsConfig } from '../shared/http-tls';
 
 export interface RepoSummary {
   repoId: string;
@@ -94,7 +95,10 @@ export type MergeResult =
     };
 
 export class VersioningApiAdapter {
-  constructor(private readonly serverUrl: string) {}
+  constructor(
+    private readonly serverUrl: string,
+    private readonly tlsConfig: HttpTlsConfig = {},
+  ) {}
 
   async createRepo(accessToken: string, repoId: string): Promise<RepoSummary> {
     const res = await this.request('/api/v1/versioning/repos', accessToken, {
@@ -403,6 +407,7 @@ export class VersioningApiAdapter {
     options: { method: 'GET' | 'POST' | 'PUT' | 'DELETE'; body?: unknown },
   ): Promise<Response> {
     try {
+      const tls = buildFetchTlsOptions(this.tlsConfig);
       return await fetch(this.serverUrl + path, {
         method: options.method,
         headers: {
@@ -410,6 +415,7 @@ export class VersioningApiAdapter {
           ...(options.body ? { 'content-type': 'application/json' } : {}),
         },
         ...(options.body ? { body: JSON.stringify(options.body) } : {}),
+        ...(tls ? { tls } : {}),
       });
     } catch (err) {
       throw new ServerUnreachableError(err);

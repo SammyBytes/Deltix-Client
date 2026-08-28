@@ -27,6 +27,20 @@ const envSchema = z.object({
   // match the DNS name the server's certificate was issued for (our
   // self-signed dev/test certs use CN=localhost).
   DELTIX_GRPC_TLS_SERVER_NAME_OVERRIDE: z.string().min(1).optional(),
+  // Path to a CA certificate to trust for HTTP (REST) calls to the control
+  // plane — login, push/pull ticket issuance, versioning API. In most real
+  // deployments this is the *same* certificate as the gRPC one (the
+  // installer generates one self-signed cert used for both), so
+  // `applyPersistedConfigDefaults()` falls back to `DELTIX_GRPC_TLS_CA_PATH`
+  // when this is not set explicitly. Without it, any self-signed server
+  // certificate causes every HTTP call to fail with
+  // `TypeError: self signed certificate`.
+  DELTIX_HTTP_TLS_CA_PATH: z.string().min(1).optional(),
+  // Overrides the TLS ServerName used for HTTP certificate verification,
+  // for the same reason as DELTIX_GRPC_TLS_SERVER_NAME_OVERRIDE (Node/Bun's
+  // TLS stack rejects IP-address ServerNames). Falls back to
+  // DELTIX_GRPC_TLS_SERVER_NAME_OVERRIDE when not set explicitly.
+  DELTIX_HTTP_TLS_SERVER_NAME_OVERRIDE: z.string().min(1).optional(),
   // Heartbeat cadence while a Push/Pull is in flight, kept comfortably
   // below the server's ticket TTL (default 120s) so the sliding window
   // never lapses mid-transfer.
@@ -57,6 +71,8 @@ export function applyPersistedConfigDefaults(config: {
   grpcPort?: number;
   grpcTlsCaPath?: string;
   grpcTlsServerNameOverride?: string;
+  httpTlsCaPath?: string;
+  httpTlsServerNameOverride?: string;
 }): void {
   const fallback: Record<string, string | undefined> = {
     DELTIX_SERVER_URL: config.serverUrl,
@@ -64,6 +80,12 @@ export function applyPersistedConfigDefaults(config: {
     DELTIX_GRPC_PORT: config.grpcPort?.toString(),
     DELTIX_GRPC_TLS_CA_PATH: config.grpcTlsCaPath,
     DELTIX_GRPC_TLS_SERVER_NAME_OVERRIDE: config.grpcTlsServerNameOverride,
+    // The HTTP control plane and gRPC transfer engine present the same
+    // certificate in most real deployments, so default the HTTP-specific
+    // values from their gRPC counterparts when not explicitly configured.
+    DELTIX_HTTP_TLS_CA_PATH: config.httpTlsCaPath ?? config.grpcTlsCaPath,
+    DELTIX_HTTP_TLS_SERVER_NAME_OVERRIDE:
+      config.httpTlsServerNameOverride ?? config.grpcTlsServerNameOverride,
   };
   for (const [key, value] of Object.entries(fallback)) {
     if (value !== undefined && Bun.env[key] === undefined) {

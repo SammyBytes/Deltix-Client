@@ -88,6 +88,15 @@ export async function promptText(
   return typeof answer === 'string' ? answer : (opts.default ?? '');
 }
 
+/** Prompts the user for a yes/no confirmation (e.g. trusting a fetched certificate). */
+export async function promptConfirm(
+  message: string,
+  opts: { default?: boolean } = {},
+): Promise<boolean> {
+  const answer = await consola.prompt(message, { type: 'confirm', default: opts.default ?? false });
+  return typeof answer === 'boolean' ? answer : (opts.default ?? false);
+}
+
 /** Prints the plain usage/help lines (no color coding needed here). */
 export function printLines(lines: string[]): void {
   for (const line of lines) consola.log(line);

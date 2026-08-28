@@ -1,5 +1,4 @@
 #!/usr/bin/env bun
-import { ConfigStore, defaultConfigPath } from '../contexts/config';
 /**
  * Deltix-Client CLI entrypoint.
  *
@@ -11,6 +10,11 @@ import { ConfigStore, defaultConfigPath } from '../contexts/config';
  * the structured Pino logger — the logger is for diagnostics, not for
  * interactive command output (see output.ts doc comment for context).
  */
+import { mkdir, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { CertificateFetchError, fetchServerCertificate } from '../acl/certificate-bootstrap';
+import { ConfigStore, defaultConfigPath } from '../contexts/config';
 import {
   createDataflowService,
   LocalFileNotFoundError,
@@ -45,6 +49,7 @@ import {
   printLines,
   printSuccess,
   printTable,
+  promptConfirm,
   promptText,
 } from './output';
 
@@ -512,12 +517,20 @@ function handleDataflowError(err: unknown, action: string): number {
 
 /**
  * Interactive one-time connection setup. Persists to `~/.deltix/config.json`
- * so a first-time user isn't left to discover `DELTIX_GRPC_*` env vars on
- * their own — in particular `DELTIX_GRPC_TLS_SERVER_NAME_OVERRIDE`, which is
- * required whenever the server is reached by IP address (Node's TLS stack
- * rejects IP addresses as SNI ServerNames outright). Env vars, when set,
- * still always take precedence over this persisted config (see
- * shared/env.ts's `applyPersistedConfigDefaults`).
+ * so a first-time user isn't left to discover `DELTIX_GRPC_*`/
+ * `DELTIX_HTTP_*` env vars on their own — in particular
+ * `DELTIX_GRPC_TLS_SERVER_NAME_OVERRIDE`, which is required whenever the
+ * server is reached by IP address (Node's TLS stack rejects IP addresses as
+ * SNI ServerNames outright). Env vars, when set, still always take
+ * precedence over this persisted config (see shared/env.ts's
+ * `applyPersistedConfigDefaults`).
+ *
+ * When the server uses a self-signed certificate, offers to fetch it
+ * automatically (Trust-On-First-Use, like an SSH host key) instead of
+ * requiring the operator to manually copy a `.crt` file off the server —
+ * the exact friction reported in production (missing path, `sudo` needing
+ * a TTY over SSH, etc). The fetched certificate's fingerprint is always
+ * shown for explicit confirmation before anything is trusted or saved.
  */
 async function runConfigure(): Promise<number> {
   printInfo('Deltix connection setup (Ctrl+C to cancel; press Enter to keep the default)');
@@ -545,11 +558,25 @@ async function runConfigure(): Promise<number> {
     });
   }
 
-  const caPathAnswer = await promptText(
-    'Path to a CA certificate to trust (leave blank if the server uses a publicly-trusted certificate)',
-    { default: '' },
-  );
-  if (caPathAnswer.trim() !== '') grpcTlsCaPath = caPathAnswer.trim();
+  const isHttps = serverUrl.trim().toLowerCase().startsWith('https://');
+  if (isHttps) {
+    const wantsAutoFetch = await promptConfirm(
+      'Server uses HTTPS. Does it use a self-signed certificate that needs to be trusted ' +
+        '(fetch it automatically instead of copying a .crt file by hand)?',
+      { default: true },
+    );
+    if (wantsAutoFetch) {
+      grpcTlsCaPath = await autoFetchAndTrustCertificate(grpcHost, grpcPort);
+    }
+  }
+
+  if (!grpcTlsCaPath) {
+    const caPathAnswer = await promptText(
+      'Path to a CA certificate to trust (leave blank if the server uses a publicly-trusted certificate)',
+      { default: '' },
+    );
+    if (caPathAnswer.trim() !== '') grpcTlsCaPath = caPathAnswer.trim();
+  }
 
   const store = new ConfigStore(defaultConfigPath);
   await store.save({
@@ -563,6 +590,55 @@ async function runConfigure(): Promise<number> {
   printSuccess(`Configuration saved to ${defaultConfigPath}`);
   printKeyValues({ serverUrl, grpcHost, grpcPort, grpcTlsCaPath, grpcTlsServerNameOverride });
   return 0;
+}
+
+const DEFAULT_TRUSTED_CERT_PATH = join(homedir(), '.deltix', 'trusted-server.crt');
+
+/**
+ * Fetches the server's certificate over a raw TLS handshake (with
+ * validation disabled for that single bootstrap connection only), shows
+ * its fingerprint, and — only after explicit user confirmation — writes it
+ * to `~/.deltix/trusted-server.crt` and returns that path. Returns
+ * `undefined` on failure or if the user declines to trust it, in which
+ * case the caller falls back to prompting for a manual CA path.
+ */
+async function autoFetchAndTrustCertificate(
+  host: string,
+  port: number,
+): Promise<string | undefined> {
+  printInfo(`Connecting to ${host}:${port} to fetch the server's certificate...`);
+  let fetched: Awaited<ReturnType<typeof fetchServerCertificate>>;
+  try {
+    fetched = await fetchServerCertificate(host, port);
+  } catch (err) {
+    const message = err instanceof CertificateFetchError ? err.message : String(err);
+    printError(`Could not fetch the certificate automatically: ${message}`);
+    printInfo('Falling back to manual entry.');
+    return undefined;
+  }
+
+  printInfo('Certificate received:');
+  printKeyValues({
+    subject: fetched.subject,
+    issuer: fetched.issuer,
+    validTo: fetched.validTo,
+    sha256Fingerprint: fetched.fingerprint256,
+  });
+  printInfo(
+    'Verify this fingerprint matches the one shown by the server operator (e.g. in the ' +
+      'install.sh summary) before trusting it — this is the same trust model as an SSH host key.',
+  );
+
+  const trusted = await promptConfirm('Trust this certificate?', { default: false });
+  if (!trusted) {
+    printInfo('Certificate not trusted. Falling back to manual entry.');
+    return undefined;
+  }
+
+  await mkdir(join(homedir(), '.deltix'), { recursive: true });
+  await writeFile(DEFAULT_TRUSTED_CERT_PATH, fetched.pem, { mode: 0o600 });
+  printSuccess(`Certificate saved to ${DEFAULT_TRUSTED_CERT_PATH}`);
+  return DEFAULT_TRUSTED_CERT_PATH;
 }
 
 async function runVersion(): Promise<number> {

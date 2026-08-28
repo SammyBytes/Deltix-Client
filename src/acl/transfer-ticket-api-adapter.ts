@@ -16,6 +16,7 @@ import {
   TicketNotFoundOrInactiveError,
 } from '../contexts/dataflow/errors';
 import { ServerUnreachableError } from '../contexts/session/errors';
+import { buildFetchTlsOptions, type HttpTlsConfig } from '../shared/http-tls';
 
 export interface IssuedTicket {
   ticketId: string;
@@ -25,7 +26,10 @@ export interface IssuedTicket {
 }
 
 export class TransferTicketApiAdapter {
-  constructor(private readonly serverUrl: string) {}
+  constructor(
+    private readonly serverUrl: string,
+    private readonly tlsConfig: HttpTlsConfig = {},
+  ) {}
 
   async issueTicket(
     accessToken: string,
@@ -66,6 +70,7 @@ export class TransferTicketApiAdapter {
 
   private async request(path: string, accessToken: string, body: unknown): Promise<Response> {
     try {
+      const tls = buildFetchTlsOptions(this.tlsConfig);
       return await fetch(`${this.serverUrl}${path}`, {
         method: 'POST',
         headers: {
@@ -73,6 +78,7 @@ export class TransferTicketApiAdapter {
           authorization: `Bearer ${accessToken}`,
         },
         body: JSON.stringify(body),
+        ...(tls ? { tls } : {}),
       });
     } catch (err) {
       throw new ServerUnreachableError(err);

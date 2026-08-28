@@ -8,6 +8,7 @@ import {
   NoActiveSessionError,
   ServerUnreachableError,
 } from '../contexts/session/errors';
+import { buildFetchTlsOptions, type HttpTlsConfig } from '../shared/http-tls';
 
 export interface LoginTokens {
   accessToken: string;
@@ -23,7 +24,10 @@ export interface RefreshResult {
 }
 
 export class AuthApiAdapter {
-  constructor(private readonly serverUrl: string) {}
+  constructor(
+    private readonly serverUrl: string,
+    private readonly tlsConfig: HttpTlsConfig = {},
+  ) {}
 
   async login(username: string, password: string): Promise<LoginTokens> {
     const res = await this.request('/api/v1/auth/login', { username, password });
@@ -71,10 +75,12 @@ export class AuthApiAdapter {
 
   private async request(path: string, body: unknown): Promise<Response> {
     try {
+      const tls = buildFetchTlsOptions(this.tlsConfig);
       return await fetch(`${this.serverUrl}${path}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
+        ...(tls ? { tls } : {}),
       });
     } catch (err) {
       throw new ServerUnreachableError(err);

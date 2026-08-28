@@ -9,6 +9,56 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.4.0] - 2026-08-28
+
+**In plain terms:** logging in and pushing/pulling against a server with a
+self-signed HTTPS certificate (the default for a fresh `install.sh` setup)
+used to require the insecure, process-wide `NODE_TLS_REJECT_UNAUTHORIZED=0`
+workaround for login — and even then, pushes/pulls still failed at the gRPC
+layer with `DEPTH_ZERO_SELF_SIGNED_CERT`, because that env var has no effect
+on the gRPC client. On top of that, there was no way to get the server's
+certificate onto the client machine except manually copying the file, which
+routinely broke on wrong paths and `sudo` needing a terminal. Both problems
+are fixed: every network call (REST and gRPC) now has a real way to trust a
+specific certificate, and `deltix configure` can fetch that certificate for
+you and ask you to confirm it, the same way SSH asks you to confirm a new
+host key.
+
+### Fixed
+
+- **HTTP calls now support a trusted CA certificate.** `AuthApiAdapter`,
+  `TransferTicketApiAdapter`, and `VersioningApiAdapter` previously used a
+  bare `fetch()` with no TLS configuration at all, so a self-signed server
+  certificate made every REST call (login, push/pull ticket issuance, repo/
+  branch/merge/log/diff/roles/sync-prefs) fail with
+  `TypeError: self signed certificate`. They now accept a CA cert path and
+  optional TLS server name override, passed through Bun's native
+  `fetch(url, { tls })` option — trusting only this specific certificate,
+  for only Deltix's own HTTP calls, instead of disabling TLS validation
+  process-wide.
+
+### Added
+
+- **Automatic certificate bootstrap in `deltix configure`.** When the
+  configured server URL is `https://`, `configure` now offers to fetch the
+  server's certificate directly (a raw TLS handshake, the same approach
+  `openssl s_client`/browsers use to show you a cert before you decide to
+  trust it) instead of requiring a manual `scp`/`ssh cat` off the server.
+  The fingerprint, subject, issuer, and expiry are shown for explicit
+  confirmation — nothing is trusted automatically — before being saved to
+  `~/.deltix/trusted-server.crt` and reused for both HTTP and gRPC (both
+  normally share one certificate in a standard install). Declining falls
+  back to the previous manual CA-path prompt.
+- **`DELTIX_HTTP_TLS_CA_PATH`/`DELTIX_HTTP_TLS_SERVER_NAME_OVERRIDE`** env
+  vars, mirroring the existing `DELTIX_GRPC_TLS_*` ones for the HTTP side.
+  Both fall back to their gRPC counterparts when not set explicitly, since
+  a standard deployment presents the same certificate on both ports.
+
+87/87 tests (11 new), lint clean, 0 vulnerabilities (`bun audit`). Verified
+end-to-end against a real self-signed HTTPS test server: certificate fetch,
+confirmation, and a subsequent HTTPS call succeed with
+`NODE_TLS_REJECT_UNAUTHORIZED` left at its secure default.
+
 ## [0.3.0] - 2026-08-27
 
 **In plain terms:** connecting to a server on a non-default machine used to

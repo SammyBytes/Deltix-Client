@@ -20,6 +20,15 @@ export interface StoredConfig {
   grpcPort?: number;
   grpcTlsCaPath?: string;
   grpcTlsServerNameOverride?: string;
+  /**
+   * CA cert / SNI override for HTTP (REST) calls. Optional and independent
+   * from the gRPC fields above — set this only when the HTTP control plane
+   * presents a *different* certificate than the gRPC transfer engine. When
+   * omitted, `applyPersistedConfigDefaults()` falls back to the gRPC values,
+   * since both normally share the same self-signed certificate.
+   */
+  httpTlsCaPath?: string;
+  httpTlsServerNameOverride?: string;
 }
 
 export class ConfigStore {
