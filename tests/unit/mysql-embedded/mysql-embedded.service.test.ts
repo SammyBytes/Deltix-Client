@@ -69,6 +69,8 @@ describe('mysql-embedded/mysql-embedded.service (unit, mocks)', () => {
     expect(spawnCalls[0]).toContain('--port');
     expect(spawnCalls[0]).toContain('3306');
     expect(spawnCalls[0]).toContain('--data-dir');
+    // Dolt 2.3.x removed --user/--password from sql-server; never pass them.
+    expect(spawnCalls[0]).not.toContain('--user');
     expect(state.pid).toBe(REAL_ALIVE_PID);
     expect(state.port).toBe(3306);
 

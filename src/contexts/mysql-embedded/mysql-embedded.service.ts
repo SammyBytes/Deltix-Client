@@ -122,16 +122,20 @@ export class MysqlEmbeddedService {
       String(this.localPort),
       '--data-dir',
       dataDir,
-      '--user',
-      'root',
     ];
 
     let exited = false;
+    let stderrTail = '';
     const spawned = this.spawn(binaryPath, args, {
       cwd: dataDir,
       onExit: () => {
         exited = true;
       },
+    });
+    // Capture the server's stderr so a failed start surfaces the real reason
+    // (Dolt writes fatal config errors here), not a generic timeout.
+    spawned.stderr.on('data', (chunk: Buffer | string) => {
+      stderrTail = (stderrTail + chunk.toString()).slice(-2000);
     });
     this.deps.onSpawned?.(spawned, args);
 
@@ -142,7 +146,9 @@ export class MysqlEmbeddedService {
       if (exited) {
         throw new LocalServerStartError(
           repo,
-          'the Dolt server process exited before becoming ready (see the server stderr for details)',
+          `the Dolt server process exited before becoming ready${
+            stderrTail.trim() ? `: ${stderrTail.trim().split('\n').slice(-2).join(' ')}` : ''
+          }`,
         );
       }
       try {
