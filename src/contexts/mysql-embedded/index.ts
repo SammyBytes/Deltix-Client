@@ -13,5 +13,10 @@ export {
   LocalServerPortInUseError,
   LocalServerStartError,
 } from './mysql-embedded.errors';
-export type { LocalServerStatus, MysqlEmbeddedDeps, RunState } from './mysql-embedded.service';
+export type {
+  LocalServerIdentity,
+  LocalServerStatus,
+  MysqlEmbeddedDeps,
+  RunState,
+} from './mysql-embedded.service';
 export { MysqlEmbeddedService, waitForTcpPort } from './mysql-embedded.service';

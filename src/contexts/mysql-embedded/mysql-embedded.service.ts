@@ -7,13 +7,21 @@
  * MySQL service on the host.
  *
  * Lifecycle:
- *   - `start(repo)`   resolves a Dolt binary (via binary-manager), spawns
- *                     `dolt sql-server --data-dir <home>/repos/<repo>` as a
- *                     detached background process, waits for the port to
- *                     accept connections, and records a run-state file.
- *   - `stop(repo)`    terminates the recorded PID and clears the run state.
- *   - `status(repo)`  reports whether the recorded process is alive and its
+ *   - `start({ repo, projectRoot? })`  resolves a Dolt binary (via
+ *                     binary-manager), spawns `dolt sql-server` on the repo's
+ *                     data dir as a detached background process, waits for the
+ *                     port to accept connections, and records a run-state file.
+ *   - `stop(...)`     terminates the recorded PID and clears the run state.
+ *   - `status(...)`   reports whether the recorded process is alive and its
  *                     port is accepting connections.
+ *
+ * State isolation: when a `projectRoot` is provided (from a `deltix init`ed
+ * working tree), both the data dir and the run-state are keyed off the
+ * absolute project path rather than the repo name. This mirrors git clones —
+ * two checkouts of the same repo can each run their own server without
+ * colliding, and switching between projects never clobbers a running one.
+ * Without a `projectRoot` (legacy `deltix start <repo>`), state is keyed by
+ * repo name under `~/.deltix/repos/<repo>`, preserving the earlier behaviour.
  *
  * All process spawning and the only place that shells out to external
  * executables is `src/acl/dolt-exec.ts`; this context holds no direct
@@ -26,6 +34,7 @@ import { join } from 'node:path';
 import type { BackgroundProcess } from '../../acl/dolt-exec';
 import { spawnBackgroundProcess } from '../../acl/dolt-exec';
 import type { BinaryManager } from '../binary-manager';
+import { projectStateKey } from '../local-project';
 import {
   LocalServerNotRunningError,
   LocalServerPortInUseError,
@@ -46,6 +55,7 @@ export interface RunState {
   port: number;
   dataDir: string;
   startedAt: number;
+  projectRoot?: string;
 }
 
 export interface MysqlEmbeddedDeps {
@@ -65,8 +75,18 @@ export interface MysqlEmbeddedDeps {
   onSpawned?: (process: BackgroundProcess, args: string[]) => void;
 }
 
-function sanitizeRepoDir(repo: string): string {
-  return repo.replace(/[^A-Za-z0-9._-]/g, '_');
+/**
+ * Identifies which local server is being addressed. `repo` is the Deltix repo
+ * name (for display); `projectRoot`, when present, is the absolute path of the
+ * `deltix init`ed working tree that state/data-dir should be keyed off.
+ */
+export interface LocalServerIdentity {
+  repo: string;
+  projectRoot?: string;
+}
+
+function sanitizeFilePart(value: string): string {
+  return value.replace(/[^A-Za-z0-9._-]/g, '_');
 }
 
 export class MysqlEmbeddedService {
@@ -88,29 +108,35 @@ export class MysqlEmbeddedService {
     this.waitForPort = deps.waitForPort ?? waitForTcpPort;
   }
 
-  dataDirFor(repo: string): string {
-    return join(this.homeDir, 'repos', sanitizeRepoDir(repo));
+  dataDirFor(id: LocalServerIdentity): string {
+    // Per-checkout isolation: key off the project path so two clones of the
+    // same repo don't share a data dir or collide on the run state.
+    return id.projectRoot
+      ? join(this.homeDir, 'projects', projectStateKey(id.projectRoot))
+      : join(this.homeDir, 'repos', sanitizeFilePart(id.repo));
   }
 
-  private statePath(repo: string): string {
-    return join(this.homeDir, 'run', `${sanitizeRepoDir(repo)}.json`);
+  private statePath(id: LocalServerIdentity): string {
+    return id.projectRoot
+      ? join(this.homeDir, 'run', `project-${projectStateKey(id.projectRoot)}.json`)
+      : join(this.homeDir, 'run', `${sanitizeFilePart(id.repo)}.json`);
   }
 
-  async start(repo: string): Promise<RunState> {
-    const dataDir = this.dataDirFor(repo);
+  async start(id: LocalServerIdentity): Promise<RunState> {
+    const dataDir = this.dataDirFor(id);
     await mkdir(dataDir, { recursive: true });
 
-    const running = await this.status(repo);
+    const running = await this.status(id);
     if (running.running) {
-      const existing = await this.readState(repo);
+      const existing = await this.readState(id);
       if (existing) return existing;
     }
 
-    const existing = await this.readState(repo);
+    const existing = await this.readState(id);
     if (existing) {
       // A stale state file points at a dead process; remove it before starting
       // fresh so an orphaned PID never blocks a clean start.
-      await rm(this.statePath(repo), { force: true });
+      await rm(this.statePath(id), { force: true });
     }
 
     const binaryPath = await this.deps.binaryManager.ensureInstalled();
@@ -145,7 +171,7 @@ export class MysqlEmbeddedService {
       // the process we spawned already exited, rather than probing its PID.
       if (exited) {
         throw new LocalServerStartError(
-          repo,
+          id.repo,
           `the Dolt server process exited before becoming ready${
             stderrTail.trim() ? `: ${stderrTail.trim().split('\n').slice(-2).join(' ')}` : ''
           }`,
@@ -160,34 +186,35 @@ export class MysqlEmbeddedService {
     }
 
     const state: RunState = {
-      repo,
+      repo: id.repo,
       pid: spawned.pid,
       port: this.localPort,
       dataDir,
       startedAt: this.now(),
+      projectRoot: id.projectRoot,
     };
     await this.writeState(state);
     return state;
   }
 
-  async stop(repo: string): Promise<{ repo: string; stopped: boolean }> {
-    const state = await this.readState(repo);
-    if (!state) throw new LocalServerNotRunningError(repo);
+  async stop(id: LocalServerIdentity): Promise<{ repo: string; stopped: boolean }> {
+    const state = await this.readState(id);
+    if (!state) throw new LocalServerNotRunningError(id.repo);
 
     try {
       process.kill(state.pid, 'SIGTERM');
     } catch {
       // Process already gone — clean up the stale state and report stopped.
     }
-    await rm(this.statePath(repo), { force: true });
-    return { repo, stopped: true };
+    await rm(this.statePath(id), { force: true });
+    return { repo: id.repo, stopped: true };
   }
 
-  async status(repo: string): Promise<LocalServerStatus> {
-    const dataDir = this.dataDirFor(repo);
-    const state = await this.readState(repo);
+  async status(id: LocalServerIdentity): Promise<LocalServerStatus> {
+    const dataDir = this.dataDirFor(id);
+    const state = await this.readState(id);
     if (!state) {
-      return { repo, running: false, dataDir };
+      return { repo: id.repo, running: false, dataDir };
     }
 
     let alive = true;
@@ -198,12 +225,12 @@ export class MysqlEmbeddedService {
     }
 
     if (!alive) {
-      await rm(this.statePath(repo), { force: true }).catch(() => {});
-      return { repo, running: false, dataDir };
+      await rm(this.statePath(id), { force: true }).catch(() => {});
+      return { repo: id.repo, running: false, dataDir };
     }
 
     return {
-      repo,
+      repo: id.repo,
       running: alive,
       pid: state.pid,
       port: state.port,
@@ -211,9 +238,9 @@ export class MysqlEmbeddedService {
     };
   }
 
-  private async readState(repo: string): Promise<RunState | null> {
+  private async readState(id: LocalServerIdentity): Promise<RunState | null> {
     try {
-      const raw = await readFile(this.statePath(repo), 'utf8');
+      const raw = await readFile(this.statePath(id), 'utf8');
       return JSON.parse(raw) as RunState;
     } catch {
       return null;
@@ -222,7 +249,11 @@ export class MysqlEmbeddedService {
 
   private async writeState(state: RunState): Promise<void> {
     await mkdir(join(this.homeDir, 'run'), { recursive: true });
-    await writeFile(this.statePath(state.repo), JSON.stringify(state, null, 2), { mode: 0o600 });
+    await writeFile(
+      this.statePath({ repo: state.repo, projectRoot: state.projectRoot }),
+      JSON.stringify(state, null, 2),
+      { mode: 0o600 },
+    );
   }
 }
 

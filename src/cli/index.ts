@@ -22,6 +22,12 @@ import {
   TransferAbortedError,
 } from '../contexts/dataflow';
 import {
+  createLocalProjectService,
+  InvalidRepoNameError,
+  NoProjectError,
+  ProjectAlreadyInitializedError,
+} from '../contexts/local-project';
+import {
   createMysqlEmbeddedService,
   LocalServerNotRunningError,
   LocalServerPortInUseError,
@@ -706,15 +712,64 @@ async function runVersion(): Promise<number> {
   return 0;
 }
 
-async function runStart(args: string[]): Promise<number> {
+async function runInit(args: string[]): Promise<number> {
   const [repo] = args;
   if (!repo) {
-    printError('Usage: deltix start <repo>');
+    printError('Usage: deltix init <repo>');
     return 1;
   }
   try {
-    const state = await createMysqlEmbeddedService().start(repo);
-    printSuccess(`Local Dolt SQL server started for ${repo}`, {
+    const project = await createLocalProjectService().init(process.cwd(), repo);
+    printSuccess(`Initialized Deltix project in ${project.root}`, {
+      repo,
+      config: project.configPath,
+      branch: project.config.branch,
+    });
+    return 0;
+  } catch (err) {
+    if (err instanceof ProjectAlreadyInitializedError) {
+      printError(`Already initialized: ${err.message}`);
+      return 1;
+    }
+    if (err instanceof InvalidRepoNameError) {
+      printError(String(err.message));
+      return 1;
+    }
+    printError(`Init failed: ${String(err)}`);
+    return 1;
+  }
+}
+
+/**
+ * Resolves the repo a local-server command operates on. When no repo name is
+ * given, falls back to the nearest `deltix init`ed project (like git finding
+ * `.git`), so `deltix start` makes sense inside a working tree. When a project
+ * is found, its absolute root is threaded through so the local server state is
+ * keyed per-checkout (switching projects never collides).
+ */
+async function resolveServerIdentity(
+  repoArg: string | undefined,
+): Promise<{ repo: string; projectRoot?: string } | null> {
+  if (repoArg) return { repo: repoArg };
+  try {
+    const project = await createLocalProjectService().resolve(process.cwd());
+    return { repo: project.config.repo, projectRoot: project.root };
+  } catch (err) {
+    if (err instanceof NoProjectError) {
+      printError(String(err.message));
+      return null;
+    }
+    throw err;
+  }
+}
+
+async function runStart(args: string[]): Promise<number> {
+  const [repoArg] = args;
+  const identity = await resolveServerIdentity(repoArg);
+  if (!identity) return 1;
+  try {
+    const state = await createMysqlEmbeddedService().start(identity);
+    printSuccess(`Local Dolt SQL server started for ${identity.repo}`, {
       host: '127.0.0.1',
       port: state.port,
       pid: state.pid,
@@ -727,14 +782,12 @@ async function runStart(args: string[]): Promise<number> {
 }
 
 async function runStop(args: string[]): Promise<number> {
-  const [repo] = args;
-  if (!repo) {
-    printError('Usage: deltix stop <repo>');
-    return 1;
-  }
+  const [repoArg] = args;
+  const identity = await resolveServerIdentity(repoArg);
+  if (!identity) return 1;
   try {
-    await createMysqlEmbeddedService().stop(repo);
-    printSuccess(`Local Dolt SQL server stopped for ${repo}`);
+    await createMysqlEmbeddedService().stop(identity);
+    printSuccess(`Local Dolt SQL server stopped for ${identity.repo}`);
     return 0;
   } catch (err) {
     return handleLocalServerError(err);
@@ -742,22 +795,20 @@ async function runStop(args: string[]): Promise<number> {
 }
 
 async function runStatus(args: string[]): Promise<number> {
-  const [repo] = args;
-  if (!repo) {
-    printError('Usage: deltix status <repo>');
-    return 1;
-  }
+  const [repoArg] = args;
+  const identity = await resolveServerIdentity(repoArg);
+  if (!identity) return 1;
   try {
-    const status = await createMysqlEmbeddedService().status(repo);
+    const status = await createMysqlEmbeddedService().status(identity);
     if (status.running) {
-      printSuccess(`Local Dolt SQL server is running for ${repo}`, {
+      printSuccess(`Local Dolt SQL server is running for ${identity.repo}`, {
         host: '127.0.0.1',
         port: status.port,
         pid: status.pid,
         dataDir: status.dataDir,
       });
     } else {
-      printInfo(`Local Dolt SQL server is not running for ${repo}`);
+      printInfo(`Local Dolt SQL server is not running for ${identity.repo}`);
     }
     return 0;
   } catch (err) {
@@ -798,6 +849,8 @@ export async function runCli(argv: string[]): Promise<number> {
       return runStop(rest);
     case 'status':
       return runStatus(rest);
+    case 'init':
+      return runInit(rest);
     case 'login':
       return runLogin(rest);
     case 'logout':
@@ -825,11 +878,12 @@ export async function runCli(argv: string[]): Promise<number> {
     default:
       printLines([
         'Deltix-Client versioning parity with Deltix-Server Fase 5',
-        'Usage: deltix <version|configure|login|logout|whoami|push|pull|repo|branch|merge|log|diff|roles|sync-prefs|start|stop|status> [...args]',
+        'Usage: deltix <version|configure|init|login|logout|whoami|push|pull|repo|branch|merge|log|diff|roles|sync-prefs|start|stop|status> [...args]',
         '  deltix configure',
-        '  deltix start <repo>',
-        '  deltix stop <repo>',
-        '  deltix status <repo>',
+        '  deltix init <repo>',
+        '  deltix start [<repo>]',
+        '  deltix stop [<repo>]',
+        '  deltix status [<repo>]',
         '  deltix repo create <repo>',
         '  deltix repo list',
         '  deltix repo get <repo>',
