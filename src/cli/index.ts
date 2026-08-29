@@ -311,6 +311,32 @@ async function runFetch(args: string[]): Promise<number> {
   }
 }
 
+async function runClone(args: string[]): Promise<number> {
+  const [repo] = args;
+  if (!repo) {
+    printError('Usage: deltix clone <repo>');
+    return 1;
+  }
+  try {
+    const targetDir = join(process.cwd(), repo);
+    await mkdir(targetDir, { recursive: true });
+    const project = await createLocalProjectService().init(targetDir, repo);
+    const identity = { repo: project.config.repo, projectRoot: project.root };
+    const local = await newLocalService();
+    await local.initLocalRepo(identity);
+    const { commits } = await createVersioningService().pullCommits(repo, 'main', null);
+    if (commits.length > 0) {
+      const head = await local.applyCommits(identity, 'main', commits);
+      await local.advanceRemoteRef(identity, 'main', head);
+    }
+    printSuccess(`Cloned ${repo} into ${targetDir}`, { commits: commits.length });
+    printInfo(`Next: cd ${repo} && deltix start`);
+    return 0;
+  } catch (err) {
+    return handleSyncError(err, 'Clone failed');
+  }
+}
+
 function parseFlagValue(args: string[], flagName: string): string | undefined {
   return args.find((arg) => arg.startsWith(`--${flagName}=`))?.slice(flagName.length + 3);
 }
@@ -320,7 +346,7 @@ function normalizeTables(args: string[]): string[] | null {
 }
 
 function branchUsage(): number {
-  printError('Usage: deltix branch <list|create|checkout|delete|current> <repo> [name]');
+  printError('Usage: deltix branch <list|local|create|checkout|delete|current> [repo] [name]');
   return 1;
 }
 
@@ -405,6 +431,22 @@ async function runBranch(args: string[]): Promise<number> {
         if (!repo) return 1;
         const branch = await service.getCurrentBranch(repo);
         printInfo(`Current branch for ${repo}: ${branch}`);
+        return 0;
+      }
+      case 'local': {
+        const identity = await resolveServerIdentity(repoArg);
+        if (!identity) return 1;
+        const local = await newLocalService();
+        const { current, local: locals, remote } = await local.listBranches(identity);
+        printLines([
+          'Local branches:',
+          ...locals.map((b) => `  ${b === current ? '*' : ' '} ${b}`),
+          '',
+          'Remote-tracking branches:',
+          ...(remote.length > 0
+            ? remote.map((b) => `    ${b}`)
+            : ['    (none — run deltix pull or fetch)']),
+        ]);
         return 0;
       }
       default:
@@ -1043,6 +1085,8 @@ export async function runCli(argv: string[]): Promise<number> {
       return runStatus(rest);
     case 'init':
       return runInit(rest);
+    case 'clone':
+      return runClone(rest);
     case 'commit':
       return runCommit(rest);
     case 'login':
@@ -1077,6 +1121,7 @@ export async function runCli(argv: string[]): Promise<number> {
         'Usage: deltix <version|configure|init|commit|login|logout|whoami|push|pull|fetch|repo|branch|merge|log|diff|roles|sync-prefs|start|stop|status> [...args]',
         '  deltix configure',
         '  deltix init <repo>',
+        '  deltix clone <repo>',
         '  deltix commit <message> [tables...]',
         '  deltix push [<repo>]',
         '  deltix pull [<repo>] [--abort]',
@@ -1088,6 +1133,7 @@ export async function runCli(argv: string[]): Promise<number> {
         '  deltix repo list',
         '  deltix repo get <repo>',
         '  deltix branch list <repo>',
+        '  deltix branch local [<repo>]',
         '  deltix branch create <repo> <name>',
         '  deltix branch checkout <repo> <name>',
         '  deltix branch delete <repo> <name>',

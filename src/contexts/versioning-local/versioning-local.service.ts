@@ -42,6 +42,12 @@ export type PullMergeResult =
   | { status: 'merged' }
   | { status: 'conflicts'; conflicts: MergeConflictSummary[] };
 
+export interface LocalBranchList {
+  current: string | null;
+  local: string[];
+  remote: string[];
+}
+
 export interface VersioningLocalDeps {
   homeDir: string;
   binaryManager: Pick<BinaryManager, 'ensureInstalled'>;
@@ -247,6 +253,51 @@ export class VersioningLocalService {
     const binaryPath = await this.deps.binaryManager.ensureInstalled();
     await this.ensureLocalRepo(binaryPath, dataDir, id.repo);
     await this.checkoutBranch(binaryPath, dataDir, branch);
+  }
+
+  /**
+   * List local branches and remote-tracking (`origin/*`) branches, mirroring
+   * `git branch -a`. The current branch is reported separately.
+   */
+  async listBranches(id: LocalServerIdentity): Promise<LocalBranchList> {
+    const dataDir = computeLocalDataDir(this.deps.homeDir, id);
+    if (!existsSync(dataDir)) {
+      throw new CommitDataDirNotFoundError(id.repo);
+    }
+    const binaryPath = await this.deps.binaryManager.ensureInstalled();
+    await this.ensureLocalRepo(binaryPath, dataDir, id.repo);
+    const result = await runDoltCommand(binaryPath, ['--data-dir', dataDir, 'branch', '-a'], {
+      timeoutMs: 10_000,
+    });
+    if (result.exitCode !== 0) {
+      throw new PushError('branch', result.stderr.trim() || result.stdout.trim());
+    }
+    const local: string[] = [];
+    const remote: string[] = [];
+    let current: string | null = null;
+    for (const raw of result.stdout.split('\n')) {
+      const line = raw.trimEnd();
+      if (!line.trim()) {
+        continue;
+      }
+      const isCurrent = line.startsWith('*');
+      const name = line
+        .replace(/^[*]\s+/, '')
+        .replace(/^\s+/, '')
+        .trim();
+      if (!name) {
+        continue;
+      }
+      if (name.startsWith('origin/')) {
+        remote.push(name);
+      } else {
+        local.push(name);
+        if (isCurrent) {
+          current = name;
+        }
+      }
+    }
+    return { current, local, remote };
   }
 
   /**
