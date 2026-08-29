@@ -16,7 +16,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { extractTarGz, findDoltExecutable } from './tar-extract';
+import { extractArchive, findDoltExecutable } from './tar-extract';
 
 export interface DoltDownloader {
   /**
@@ -39,23 +39,24 @@ export function createGitHubReleaseDownloader(): DoltDownloader {
         throw new Error('Download of Dolt failed: empty response body');
       }
 
-      const tarballPath = join(
+      const isZip = url.endsWith('.zip');
+      const archivePath = join(
         tmpdir(),
-        `deltix-dolt-${process.pid}-${Math.random().toString(36).slice(2)}.tar.gz`,
+        `deltix-dolt-${process.pid}-${Math.random().toString(36).slice(2)}.${isZip ? 'zip' : 'tar.gz'}`,
       );
       await mkdir(destDir, { recursive: true });
 
       try {
-        await pipeline(Readable.fromWeb(response.body as never), createWriteStream(tarballPath));
-        await extractTarGz(tarballPath, destDir);
+        await pipeline(Readable.fromWeb(response.body as never), createWriteStream(archivePath));
+        await extractArchive(archivePath, destDir);
         const binary = await findDoltExecutable(destDir);
         if (!binary) {
-          throw new Error('Downloaded Dolt tarball contained no dolt executable');
+          throw new Error('Downloaded Dolt archive contained no dolt executable');
         }
-        await chmod(binary, 0o755);
+        await chmod(binary, 0o755).catch(() => {});
         return binary;
       } finally {
-        await rm(tarballPath, { force: true }).catch(() => {});
+        await rm(archivePath, { force: true }).catch(() => {});
       }
     },
   };

@@ -23,7 +23,7 @@
 import { createHash } from 'node:crypto';
 import { createReadStream, existsSync } from 'node:fs';
 import { chmod, copyFile, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runCommand, whichBinary } from '../../acl/dolt-exec';
 import { loadEnv } from '../../shared/env';
@@ -31,13 +31,16 @@ import { createGitHubReleaseDownloader, type DoltDownloader } from './download';
 
 export const DOLT_VERSION = '2.3.1';
 
+/** Host OSes with an official Dolt release we know how to fetch. */
+type DoltOs = 'darwin' | 'linux' | 'win32';
+
 export interface BinaryManagerDeps {
   /** Root state dir; defaults to `~/.deltix` (or `DELTIX_HOME`). */
   homeDir?: string;
   /** Overrides `DELTIX_DOLT_BIN_PATH` (and the env var). */
   explicitBinPath?: string;
   /** Overrides OS auto-detection (test/CI). */
-  os?: 'darwin' | 'linux';
+  os?: DoltOs;
   /** Overrides arch auto-detection (test/CI). */
   arch?: 'arm64' | 'amd64';
   downloader?: DoltDownloader;
@@ -84,7 +87,8 @@ export class BinaryManager {
 
   /** Absolute path to the install'd dolt executable for a version. */
   binaryPath(version: string): string {
-    return join(this.versionDir(version), 'bin', 'dolt');
+    const exe = process.platform === 'win32' ? 'dolt.exe' : 'dolt';
+    return join(this.versionDir(version), 'bin', exe);
   }
 
   /** Returns the installed binary path if present and digest-verified. */
@@ -121,11 +125,12 @@ export class BinaryManager {
     );
     try {
       const stagedBin = await downloader.download(url, stageDir);
-      const dest = join(binDir, 'dolt');
+      const exe = process.platform === 'win32' ? 'dolt.exe' : 'dolt';
+      const dest = join(binDir, exe);
       const tmpDest = join(binDir, `.dolt.tmp-${Math.random().toString(36).slice(2)}`);
       await copyFile(stagedBin, tmpDest);
       try {
-        await chmod(tmpDest, 0o755);
+        await chmod(tmpDest, 0o755).catch(() => {});
         await rename(tmpDest, dest);
       } catch (err) {
         await rm(tmpDest, { force: true });
@@ -141,8 +146,10 @@ export class BinaryManager {
   }
 }
 
-function defaultOs(): 'darwin' | 'linux' {
-  return process.platform === 'darwin' ? 'darwin' : 'linux';
+function defaultOs(): DoltOs {
+  if (process.platform === 'darwin') return 'darwin';
+  if (process.platform === 'win32') return 'win32';
+  return 'linux';
 }
 
 function defaultArch(): 'arm64' | 'amd64' {
@@ -150,7 +157,10 @@ function defaultArch(): 'arm64' | 'amd64' {
 }
 
 function defaultHomeDir(): string {
-  return join(process.env.HOME ?? '', '.deltix');
+  // Use os.homedir() — on Windows `process.env.HOME` is typically undefined
+  // (the platform uses USERPROFILE), which previously produced a *relative*
+  // `.deltix/...` path and made the resolved binary unfindable.
+  return join(homedir(), '.deltix');
 }
 
 async function findOnPath(version: string): Promise<string | null> {
@@ -179,7 +189,10 @@ function sha256File(path: string): Promise<string> {
 }
 
 export function doltReleaseUrl(version: string, os: string, arch: string): string {
-  const platform = os === 'darwin' ? 'darwin' : 'linux';
   const a = arch === 'arm64' ? 'arm64' : 'amd64';
+  if (os === 'win32') {
+    return `https://github.com/dolthub/dolt/releases/download/v${version}/dolt-windows-${a}.zip`;
+  }
+  const platform = os === 'darwin' ? 'darwin' : 'linux';
   return `https://github.com/dolthub/dolt/releases/download/v${version}/dolt-${platform}-${a}.tar.gz`;
 }
