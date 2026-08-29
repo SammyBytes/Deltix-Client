@@ -927,13 +927,20 @@ async function runInit(args: string[]): Promise<number> {
   }
   try {
     const project = await createLocalProjectService().init(process.cwd(), repo);
-    // Create the local Dolt repo now (the "git init" moment), so the folder is
-    // a working versioned checkout before `deltix start` ever runs.
-    const { BinaryManager } = await import('../contexts/binary-manager');
-    await new VersioningLocalService({
-      homeDir: process.env.DELTIX_HOME ?? join(homedir(), '.deltix'),
-      binaryManager: new BinaryManager(),
-    }).initLocalRepo({ repo: project.config.repo, projectRoot: project.root });
+    // Create the local Dolt repo (the "git init" moment). If the Dolt binary
+    // can't be resolved yet (e.g. first-run download needs network), don't
+    // fail the bind — `deltix start` will initialize the repo then.
+    try {
+      const { BinaryManager } = await import('../contexts/binary-manager');
+      await new VersioningLocalService({
+        homeDir: process.env.DELTIX_HOME ?? join(homedir(), '.deltix'),
+        binaryManager: new BinaryManager(),
+      }).initLocalRepo({ repo: project.config.repo, projectRoot: project.root });
+    } catch (err) {
+      printInfo(
+        `Project bound, but the local Dolt engine wasn't created yet (${String(err)}). \`deltix start\` will initialize it.`,
+      );
+    }
     printSuccess(`Initialized Deltix project in ${project.root}`, {
       repo,
       config: project.configPath,
@@ -1023,6 +1030,10 @@ async function runStart(args: string[]): Promise<number> {
   const identity = await resolveServerIdentity(repoArg);
   if (!identity) return 1;
   try {
+    // Ensure the local Dolt repo exists (idempotent) before serving it, so
+    // `start` works even if `init` deferred repo creation.
+    const local = await newLocalService();
+    await local.initLocalRepo(identity);
     const state = await createMysqlEmbeddedService().start(identity);
     printSuccess(`Local Dolt SQL server started for ${identity.repo}`, {
       host: '127.0.0.1',
