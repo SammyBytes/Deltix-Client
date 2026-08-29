@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { EventEmitter } from 'node:events';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BackgroundProcess } from '../../../src/acl/dolt-exec';
@@ -62,7 +62,7 @@ describe('mysql-embedded/mysql-embedded.service (unit, mocks)', () => {
     const home = await mkdtemp(join(tmpdir(), 'deltix-me-start-'));
     const { service, spawnCalls } = makeService({ homeDir: home });
 
-    const state = await service.start('acme/widgets');
+    const state = await service.start({ repo: 'acme/widgets' });
 
     expect(spawnCalls.length).toBe(1);
     expect(spawnCalls[0]).toContain('sql-server');
@@ -87,8 +87,8 @@ describe('mysql-embedded/mysql-embedded.service (unit, mocks)', () => {
     const home = await mkdtemp(join(tmpdir(), 'deltix-me-rerun-'));
     const { service, spawnCalls } = makeService({ homeDir: home });
 
-    await service.start('repo');
-    await service.start('repo');
+    await service.start({ repo: 'repo' });
+    await service.start({ repo: 'repo' });
 
     expect(spawnCalls.length).toBe(1);
     await rm(home, { recursive: true, force: true });
@@ -98,7 +98,7 @@ describe('mysql-embedded/mysql-embedded.service (unit, mocks)', () => {
     const home = await mkdtemp(join(tmpdir(), 'deltix-me-timeout-'));
     const { service } = makeService({ homeDir: home, ready: false }, { pid: 8_999_999 });
 
-    await expect(service.start('repo')).rejects.toThrow(/already in use/);
+    await expect(service.start({ repo: 'repo' })).rejects.toThrow(/already in use/);
     await rm(home, { recursive: true, force: true });
   });
 
@@ -109,22 +109,22 @@ describe('mysql-embedded/mysql-embedded.service (unit, mocks)', () => {
       { pid: 8_999_999, exitImmediately: true },
     );
 
-    await expect(service.start('repo')).rejects.toBeInstanceOf(LocalServerStartError);
+    await expect(service.start({ repo: 'repo' })).rejects.toBeInstanceOf(LocalServerStartError);
     await rm(home, { recursive: true, force: true });
   });
 
   it('status() reports not running when there is no run state', async () => {
     const { service } = makeService();
-    const status = await service.status('ghost');
+    const status = await service.status({ repo: 'ghost' });
     expect(status.running).toBe(false);
   });
 
   it('status() reports running when the recorded PID is alive', async () => {
     const home = await mkdtemp(join(tmpdir(), 'deltix-me-statuslive-'));
     const { service } = makeService({ homeDir: home });
-    await service.start('repo');
+    await service.start({ repo: 'repo' });
 
-    const status = await service.status('repo');
+    const status = await service.status({ repo: 'repo' });
     expect(status.running).toBe(true);
     expect(status.pid).toBe(REAL_ALIVE_PID);
     await rm(home, { recursive: true, force: true });
@@ -132,7 +132,7 @@ describe('mysql-embedded/mysql-embedded.service (unit, mocks)', () => {
 
   it('stop() throws LocalServerNotRunningError with no state', async () => {
     const { service } = makeService();
-    await expect(service.stop('nope')).rejects.toBeInstanceOf(LocalServerNotRunningError);
+    await expect(service.stop({ repo: 'nope' })).rejects.toBeInstanceOf(LocalServerNotRunningError);
   });
 
   it('status() treats a stale (dead-PID) state as not running and cleans it up', async () => {
@@ -151,7 +151,7 @@ describe('mysql-embedded/mysql-embedded.service (unit, mocks)', () => {
       }),
     );
 
-    const status = await service.status('stale');
+    const status = await service.status({ repo: 'stale' });
     expect(status.running).toBe(false);
 
     let removed = false;
@@ -161,6 +161,27 @@ describe('mysql-embedded/mysql-embedded.service (unit, mocks)', () => {
       removed = true;
     }
     expect(removed).toBe(true);
+    await rm(home, { recursive: true, force: true });
+  });
+
+  it('isolation: start() keys state and data dir per project, not per repo name', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'deltix-me-isolation-'));
+    const { service, spawnCalls } = makeService({ homeDir: home });
+
+    await service.start({ repo: 'shared', projectRoot: '/work/checkout-one' });
+    await service.start({ repo: 'shared', projectRoot: '/work/checkout-two' });
+
+    // Two checkouts of the same repo each spawn their own server (no reuse).
+    expect(spawnCalls.length).toBe(2);
+    // Their data dirs must differ so the working data is isolated per clone.
+    const dataDirFor = (root: string) => service.dataDirFor({ repo: 'shared', projectRoot: root });
+    expect(dataDirFor('/work/checkout-one')).not.toBe(dataDirFor('/work/checkout-two'));
+    // Data dirs live under the per-project namespace, not repos/<name>.
+    expect(dataDirFor('/work/checkout-one')).toContain(join(home, 'projects'));
+    // Run state is written under project-<hash>.json, not <repo>.json.
+    const stateFiles = await readdir(join(home, 'run'));
+    expect(stateFiles.filter((f) => f.startsWith('project-')).length).toBe(2);
+
     await rm(home, { recursive: true, force: true });
   });
 });
