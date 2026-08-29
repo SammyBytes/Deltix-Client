@@ -9,6 +9,24 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.4.3] - 2026-08-29
+
+**In plain terms:** `deltix push`/`pull` could fail with a confusing
+"Could not parse target name" error if the gRPC host had an accidental
+trailing/embedded space or newline (e.g. stray whitespace in a
+`DELTIX_GRPC_HOST` env var or pasted config value). The host is now cleaned
+of whitespace before connecting, so a stray character never breaks a
+transfer.
+
+### Fixed
+
+- **`deltix push`/`pull` throwing `Could not parse target name "host\n\n:port"`.**
+  grpc-js rejects a channel target containing whitespace. A script or shell
+  session with a `DELTIX_GRPC_HOST` env var left over with a trailing newline
+  (which wins over the persisted config) produced exactly that broken target.
+  The host is now normalized (all whitespace stripped) before the channel is
+  created, and an all-empty host is rejected with a clear message.
+
 ## [0.4.2] - 2026-08-28
 
 **In plain terms:** connecting a client to a server that is only reachable by

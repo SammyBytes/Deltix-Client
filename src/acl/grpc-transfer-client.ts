@@ -68,6 +68,17 @@ function loadTransferEngineDefinition() {
   return proto.deltix.transfer.v1.TransferEngine;
 }
 
+/**
+ * Normalizes the gRPC host into a form grpc-js will accept as a channel
+ * target. A stray surrounding/embedded whitespace character — typically a
+ * newline pasted into a `DELTIX_GRPC_HOST` env var or a config value — makes
+ * grpc-js reject the whole target with `Could not parse target name`, so we
+ * strip all whitespace. Exposed for testability.
+ */
+export function normalizeGrpcHost(host: string): string {
+  return host.replace(/\s+/g, '');
+}
+
 export class GrpcTransferClient {
   private readonly client: TransferEngineClient;
 
@@ -78,8 +89,17 @@ export class GrpcTransferClient {
     const channelOptions: grpc.ChannelOptions = tls.serverNameOverride
       ? { 'grpc.ssl_target_name_override': tls.serverNameOverride }
       : {};
+    // Defensively strip surrounding/embedded whitespace from the host: a
+    // stray newline (e.g. pasted into a DELTIX_GRPC_HOST env var or a config
+    // value) would otherwise make grpc-js reject the whole target with
+    // `Could not parse target name "host\n\n:port"`, which is never a
+    // legitimate hostname character.
+    const cleanedHost = normalizeGrpcHost(host);
+    if (cleanedHost === '') {
+      throw new Error('gRPC host must not be empty');
+    }
     this.client = new TransferEngine(
-      `${host}:${port}`,
+      `${cleanedHost}:${port}`,
       credentials,
       channelOptions,
     ) as unknown as TransferEngineClient;
