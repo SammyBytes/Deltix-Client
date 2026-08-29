@@ -208,7 +208,28 @@ function handleSyncError(err: unknown, action: string): number {
 
 async function runPull(args: string[]): Promise<number> {
   const abort = args.includes('--abort');
-  const repoArg = args.find((a) => !a.startsWith('--'));
+  const positional = args.filter((a) => !a.startsWith('--'));
+  const repoArg = positional[0];
+  const destFile = positional[1];
+
+  // Transitional legacy path: whole-file gRPC pull, behind
+  // DELTIX_ENABLE_GRPC_TRANSFER. Removed once the native commit-based pull is
+  // confirmed in production.
+  if (loadEnv().DELTIX_ENABLE_GRPC_TRANSFER && repoArg && destFile) {
+    const { createDataflowService } = await import('../contexts/dataflow');
+    try {
+      const result = await createDataflowService().pull(repoArg, destFile);
+      printSuccess(`[legacy gRPC] Pull completed for ${repoArg}`, {
+        bytesReceived: result.bytesReceived,
+        checksum: result.checksum,
+      });
+      return 0;
+    } catch (err) {
+      printError(`Pull failed (legacy gRPC): ${String(err)}`);
+      return 1;
+    }
+  }
+
   const identity = await resolveServerIdentity(repoArg);
   if (!identity) {
     return 1;

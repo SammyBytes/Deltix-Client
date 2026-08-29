@@ -61,6 +61,15 @@ const envSchema = z.object({
   // when the host already runs a real MySQL service.
   DELTIX_LOCAL_HOST: z.string().min(1).default('127.0.0.1'),
   DELTIX_LOCAL_PORT: z.coerce.number().int().positive().default(3306),
+  // Transitional feature flag (Fase 5.9). `deltix pull` is now commit-based
+  // over REST (native, git-like). When this is enabled AND a destination file
+  // is passed, `deltix pull` falls back to the legacy whole-file gRPC transfer
+  // instead. Off by default; kept only to allow an easy rollback/comparison
+  // until the native path is fully confirmed, then the gRPC pull path is removed.
+  DELTIX_ENABLE_GRPC_TRANSFER: z
+    .enum(['true', 'false', '1', '0'])
+    .default('false')
+    .transform((v) => v === 'true' || v === '1'),
 });
 
 export type Env = z.infer<typeof envSchema>;
