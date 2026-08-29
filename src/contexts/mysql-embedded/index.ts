@@ -19,4 +19,8 @@ export type {
   MysqlEmbeddedDeps,
   RunState,
 } from './mysql-embedded.service';
-export { MysqlEmbeddedService, waitForTcpPort } from './mysql-embedded.service';
+export {
+  computeLocalDataDir,
+  MysqlEmbeddedService,
+  waitForTcpPort,
+} from './mysql-embedded.service';

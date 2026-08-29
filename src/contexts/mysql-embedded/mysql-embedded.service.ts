@@ -89,6 +89,26 @@ function sanitizeFilePart(value: string): string {
   return value.replace(/[^A-Za-z0-9._-]/g, '_');
 }
 
+/**
+ * Computes the local data-dir a repo checkout is keyed to. With a project
+ * root (from `deltix init`) the dir is derived from the absolute checkout
+ * path so two clones of the same repo stay isolated; without one (legacy
+ * `deltix start <repo>`) it falls back to the repo-name-keyed location.
+ * Shared so the local commit/push contexts address the same data dir that
+ * `deltix start` creates.
+ */
+export function computeLocalDataDir(homeDir: string, id: LocalServerIdentity): string {
+  return id.projectRoot
+    ? join(homeDir, 'projects', projectStateKey(id.projectRoot))
+    : join(homeDir, 'repos', sanitizeFilePart(id.repo));
+}
+
+export function computeLocalRunStatePath(homeDir: string, id: LocalServerIdentity): string {
+  return id.projectRoot
+    ? join(homeDir, 'run', `project-${projectStateKey(id.projectRoot)}.json`)
+    : join(homeDir, 'run', `${sanitizeFilePart(id.repo)}.json`);
+}
+
 export class MysqlEmbeddedService {
   private readonly homeDir: string;
   private readonly localHost: string;
@@ -109,17 +129,11 @@ export class MysqlEmbeddedService {
   }
 
   dataDirFor(id: LocalServerIdentity): string {
-    // Per-checkout isolation: key off the project path so two clones of the
-    // same repo don't share a data dir or collide on the run state.
-    return id.projectRoot
-      ? join(this.homeDir, 'projects', projectStateKey(id.projectRoot))
-      : join(this.homeDir, 'repos', sanitizeFilePart(id.repo));
+    return computeLocalDataDir(this.homeDir, id);
   }
 
   private statePath(id: LocalServerIdentity): string {
-    return id.projectRoot
-      ? join(this.homeDir, 'run', `project-${projectStateKey(id.projectRoot)}.json`)
-      : join(this.homeDir, 'run', `${sanitizeFilePart(id.repo)}.json`);
+    return computeLocalRunStatePath(this.homeDir, id);
   }
 
   async start(id: LocalServerIdentity): Promise<RunState> {

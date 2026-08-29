@@ -52,6 +52,12 @@ import {
   ValidationError,
   VersioningAuthenticationError,
 } from '../contexts/versioning';
+import {
+  CommitDataDirNotFoundError,
+  CommitEmptyError,
+  CommitError,
+  VersioningLocalService,
+} from '../contexts/versioning-local';
 import { getClientBuildInfo } from '../shared/build-info';
 import { applyPersistedConfigDefaults, loadEnv } from '../shared/env';
 import {
@@ -740,6 +746,47 @@ async function runInit(args: string[]): Promise<number> {
   }
 }
 
+async function runCommit(args: string[]): Promise<number> {
+  const [message, ...tables] = args;
+  if (!message) {
+    printError('Usage: deltix commit <message> [tables...]');
+    return 1;
+  }
+  try {
+    const project = await createLocalProjectService().resolve(process.cwd());
+    const identity = { repo: project.config.repo, projectRoot: project.root };
+    const { BinaryManager } = await import('../contexts/binary-manager');
+    const result = await new VersioningLocalService({
+      homeDir: process.env.DELTIX_HOME ?? join(homedir(), '.deltix'),
+      binaryManager: new BinaryManager(),
+    }).commit(identity, message, tables.length > 0 ? tables : undefined);
+    printSuccess(`Committed to ${result.repo}`, {
+      commitHash: result.commitHash,
+      message,
+    });
+    return 0;
+  } catch (err) {
+    if (err instanceof NoProjectError) {
+      printError(String(err.message));
+      return 1;
+    }
+    if (err instanceof CommitDataDirNotFoundError) {
+      printError(String(err.message));
+      return 1;
+    }
+    if (err instanceof CommitEmptyError) {
+      printError(String(err.message));
+      return 1;
+    }
+    if (err instanceof CommitError) {
+      printError(String(err.message));
+      return 1;
+    }
+    printError(`Commit failed: ${String(err)}`);
+    return 1;
+  }
+}
+
 /**
  * Resolves the repo a local-server command operates on. When no repo name is
  * given, falls back to the nearest `deltix init`ed project (like git finding
@@ -851,6 +898,8 @@ export async function runCli(argv: string[]): Promise<number> {
       return runStatus(rest);
     case 'init':
       return runInit(rest);
+    case 'commit':
+      return runCommit(rest);
     case 'login':
       return runLogin(rest);
     case 'logout':
@@ -878,9 +927,10 @@ export async function runCli(argv: string[]): Promise<number> {
     default:
       printLines([
         'Deltix-Client versioning parity with Deltix-Server Fase 5',
-        'Usage: deltix <version|configure|init|login|logout|whoami|push|pull|repo|branch|merge|log|diff|roles|sync-prefs|start|stop|status> [...args]',
+        'Usage: deltix <version|configure|init|commit|login|logout|whoami|push|pull|repo|branch|merge|log|diff|roles|sync-prefs|start|stop|status> [...args]',
         '  deltix configure',
         '  deltix init <repo>',
+        '  deltix commit <message> [tables...]',
         '  deltix start [<repo>]',
         '  deltix stop [<repo>]',
         '  deltix status [<repo>]',
