@@ -9,6 +9,35 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.6.1] - 2026-08-29
+
+**In plain terms:** fixes `deltix init` on Windows. The first Windows build
+couldn't find its database engine because it looked in a broken relative
+folder and only knew how to fetch the Linux/macOS version. Now it resolves the
+correct absolute path and downloads the right Dolt for your platform. (The
+native `pull`/`fetch`/`clone` work from 0.6.0 is unchanged; this release simply
+ships that plus the Windows fix, which had landed after 0.6.0 was cut.)
+
+### Fixed
+
+- **`deltix init` failed on Windows with `Executable not found in $PATH:
+  ".deltix\bin\dolt-2.3.1\bin\dolt"`.** Two root causes in `binary-manager`:
+  `defaultHomeDir()` used `process.env.HOME` (undefined on Windows, which uses
+  `USERPROFILE`), producing a *relative* install path — now uses
+  `os.homedir()` (absolute). And only darwin/linux `.tar.gz` releases were
+  handled — added `win32`: `dolt-windows-<arch>.zip`, extracted via
+  `tar -xf` (bsdtar on Windows 10+), binary resolved as `dolt.exe`.
+- **`deltix init` no longer hard-fails if Dolt can't be resolved yet** (e.g. a
+  first-run download needs network): it still binds the project and warns that
+  `deltix start` will initialize the engine. `deltix start` now also ensures the
+  local Dolt repo exists (idempotent) before serving it.
+
+### Tests
+
+- 113 unit tests pass; build + lint clean. (Windows Dolt download can't be
+  exercised from the Linux CI runner; path/format logic follows Dolt's official
+  release layout.)
+
 ## [0.6.0] - 2026-08-29
 
 **In plain terms:** the CLI now completes the Git loop on your side. You can
