@@ -23,3 +23,29 @@ export class CommitDataDirNotFoundError extends Error {
     this.name = 'CommitDataDirNotFoundError';
   }
 }
+
+export class PushError extends Error {
+  constructor(
+    readonly command: string,
+    readonly stderr: string,
+  ) {
+    super(`dolt ${command} failed during push: ${stderr.trim() || '(no stderr)'}`);
+    this.name = 'PushError';
+  }
+}
+
+export class PushNoUpstreamError extends Error {
+  constructor(repo: string) {
+    super(
+      `No upstream configured for "${repo}". Make sure the project has been initialized and linked to a remote repo.`,
+    );
+    this.name = 'PushNoUpstreamError';
+  }
+}
+
+export class PushEmptyError extends Error {
+  constructor(repo: string) {
+    super(`Nothing to push for "${repo}" — no unpushed commits.`);
+    this.name = 'PushEmptyError';
+  }
+}

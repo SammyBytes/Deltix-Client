@@ -56,6 +56,9 @@ import {
   CommitDataDirNotFoundError,
   CommitEmptyError,
   CommitError,
+  PushEmptyError,
+  PushError,
+  PushNoUpstreamError,
   VersioningLocalService,
 } from '../contexts/versioning-local';
 import { getClientBuildInfo } from '../shared/build-info';
@@ -118,22 +121,62 @@ async function runWhoami(): Promise<number> {
 }
 
 async function runPush(args: string[]): Promise<number> {
-  const [repo, localFilePath] = args;
-  if (!repo || !localFilePath) {
-    printError('Usage: deltix push <repo> <local-file-path>');
+  const [repoArg] = args;
+  const identity = await resolveServerIdentity(repoArg);
+  if (!identity) {
     return 1;
   }
 
   try {
-    const result = await createDataflowService().push(repo, localFilePath);
-    printSuccess(`Push completed for ${repo}`, {
-      jobId: result.jobId,
-      checksum: result.checksum,
-      bytesSent: result.bytesSent,
+    const { BinaryManager } = await import('../contexts/binary-manager');
+    const localService = new VersioningLocalService({
+      homeDir: process.env.DELTIX_HOME ?? join(homedir(), '.deltix'),
+      binaryManager: new BinaryManager(),
+    });
+
+    const commits = await localService.getUnpushedCommits(identity);
+    const result = await createVersioningService().pushCommits(identity.repo, commits);
+
+    printSuccess(`Pushed ${commits.length} commit(s) to ${identity.repo}`, {
+      commitHash: result.commitHash,
+      tables: commits.reduce((sum, c) => sum + c.tables.length, 0),
     });
     return 0;
   } catch (err) {
-    return handleDataflowError(err, 'Push failed');
+    if (err instanceof NoProjectError) {
+      printError(String(err.message));
+      return 1;
+    }
+    if (err instanceof CommitDataDirNotFoundError) {
+      printError(String(err.message));
+      return 1;
+    }
+    if (err instanceof PushNoUpstreamError) {
+      printError(String(err.message));
+      return 1;
+    }
+    if (err instanceof PushEmptyError) {
+      printInfo(String(err.message));
+      return 0;
+    }
+    if (err instanceof PushError) {
+      printError(String(err.message));
+      return 1;
+    }
+    if (err instanceof VersioningAuthenticationError) {
+      printError('Authentication failed. Run `deltix login` first.');
+      return 1;
+    }
+    if (err instanceof InsufficientRoleError) {
+      printError(String(err.message));
+      return 1;
+    }
+    if (err instanceof RepoNotFoundError) {
+      printError(String(err.message));
+      return 1;
+    }
+    printError(`Push failed: ${String(err)}`);
+    return 1;
   }
 }
 
@@ -931,6 +974,8 @@ export async function runCli(argv: string[]): Promise<number> {
         '  deltix configure',
         '  deltix init <repo>',
         '  deltix commit <message> [tables...]',
+        '  deltix push [<repo>]',
+        '  deltix pull <repo> <destination-file-path>',
         '  deltix start [<repo>]',
         '  deltix stop [<repo>]',
         '  deltix status [<repo>]',
