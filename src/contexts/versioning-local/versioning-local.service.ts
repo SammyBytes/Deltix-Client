@@ -19,10 +19,18 @@ export interface LocalCommitResult {
   repo: string;
 }
 
+export interface LocalCommitTable {
+  name: string;
+  /** CREATE TABLE DDL (from `dolt schema export`) so the receiving side can
+   * recreate the table — and its primary key — faithfully from a data-only CSV. */
+  schema: string;
+  data: string;
+}
+
 export interface LocalCommitWithData {
   message: string;
   author: string;
-  tables: { name: string; data: string }[];
+  tables: LocalCommitTable[];
 }
 
 export interface VersioningLocalDeps {
@@ -48,6 +56,47 @@ function remoteRefName(branch: string): string {
 
 function escapeSql(value: string): string {
   return value.replace(/'/g, "''");
+}
+
+const SAFE_TABLE_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+function sanitizeAuthor(name: string): string {
+  return name.replace(/[^a-zA-Z0-9_.-]/g, '_');
+}
+
+function sqlLiteral(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+/** Parse one CSV line (handles quoted fields and doubled quotes). */
+function parseCsvLine(line: string): string[] {
+  const result: string[] = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i] ?? '';
+    if (inQuotes) {
+      if (char === '"') {
+        if (line[i + 1] === '"') {
+          current += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        current += char;
+      }
+    } else if (char === '"') {
+      inQuotes = true;
+    } else if (char === ',') {
+      result.push(current);
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  result.push(current);
+  return result;
 }
 
 export class VersioningLocalService {
@@ -143,10 +192,11 @@ export class VersioningLocalService {
       if (tableNames.length === 0) {
         continue;
       }
-      const tableData: { name: string; data: string }[] = [];
+      const tableData: LocalCommitTable[] = [];
       for (const table of tableNames) {
         const data = await this.exportTableAtCommit(binaryPath, dataDir, table, row.commit_hash);
-        tableData.push({ name: table, data });
+        const schema = await this.exportTableSchema(binaryPath, dataDir, table);
+        tableData.push({ name: table, schema, data });
       }
       commits.push({ message: row.message, author: row.author, tables: tableData });
     }
@@ -168,6 +218,28 @@ export class VersioningLocalService {
     return this.readBranchHash(binaryPath, dataDir, branch);
   }
 
+  /** Head of the remote-tracking ref `origin/<branch>` (null if never synced). */
+  async getRemoteHead(id: LocalServerIdentity, branch = 'main'): Promise<string | null> {
+    const dataDir = computeLocalDataDir(this.deps.homeDir, id);
+    if (!existsSync(dataDir)) {
+      throw new CommitDataDirNotFoundError(id.repo);
+    }
+    const binaryPath = await this.deps.binaryManager.ensureInstalled();
+    await this.ensureLocalRepo(binaryPath, dataDir, id.repo);
+    return this.getRemoteRefHash(binaryPath, dataDir, branch);
+  }
+
+  /** Switch the working tree to `branch` (public wrapper over the internal checkout). */
+  async checkout(id: LocalServerIdentity, branch: string): Promise<void> {
+    const dataDir = computeLocalDataDir(this.deps.homeDir, id);
+    if (!existsSync(dataDir)) {
+      throw new CommitDataDirNotFoundError(id.repo);
+    }
+    const binaryPath = await this.deps.binaryManager.ensureInstalled();
+    await this.ensureLocalRepo(binaryPath, dataDir, id.repo);
+    await this.checkoutBranch(binaryPath, dataDir, branch);
+  }
+
   /**
    * Advance the remote-tracking ref `origin/<branch>` to `hash` (create it if
    * missing). Called after a successful push/fetch so the next one only sends
@@ -186,6 +258,153 @@ export class VersioningLocalService {
     );
     if (result.exitCode !== 0) {
       throw new PushError('branch', result.stderr.trim() || result.stdout.trim());
+    }
+  }
+
+  /**
+   * Applies commits pulled from the server onto the local `branch`, recreating
+   * each table's schema from its DDL and reloading rows from the CSV — the
+   * read-side mirror of `commit()`. Returns the resulting branch head hash.
+   * Used by `deltix pull` for the fast-forward case.
+   */
+  async applyCommits(
+    id: LocalServerIdentity,
+    branch: string,
+    commits: LocalCommitWithData[],
+  ): Promise<string> {
+    const dataDir = computeLocalDataDir(this.deps.homeDir, id);
+    if (!existsSync(dataDir)) {
+      throw new CommitDataDirNotFoundError(id.repo);
+    }
+    const binaryPath = await this.deps.binaryManager.ensureInstalled();
+    await this.ensureLocalRepo(binaryPath, dataDir, id.repo);
+    await this.checkoutBranch(binaryPath, dataDir, branch);
+
+    for (const commit of commits) {
+      for (const table of commit.tables) {
+        await this.importTable(binaryPath, dataDir, table);
+      }
+      const names = commit.tables.map((t) => t.name);
+      if (names.length === 0) {
+        continue;
+      }
+      const add = await runDoltCommand(binaryPath, ['--data-dir', dataDir, 'add', ...names], {
+        timeoutMs: 30_000,
+      });
+      if (add.exitCode !== 0) {
+        throw new PushError('add', add.stderr);
+      }
+      const safeAuthor = sanitizeAuthor(commit.author);
+      const commitResult = await runDoltCommand(
+        binaryPath,
+        [
+          '--data-dir',
+          dataDir,
+          'commit',
+          '-m',
+          commit.message,
+          `--author=${safeAuthor} <${safeAuthor}@deltix.local>`,
+        ],
+        { timeoutMs: 30_000 },
+      );
+      if (commitResult.exitCode !== 0) {
+        throw new PushError('commit', commitResult.stderr.trim() || commitResult.stdout.trim());
+      }
+    }
+
+    const head = await this.readBranchHash(binaryPath, dataDir, branch);
+    if (!head) {
+      throw new PushError('log', 'could not resolve branch head after apply');
+    }
+    return head;
+  }
+
+  private async checkoutBranch(binaryPath: string, dataDir: string, branch: string): Promise<void> {
+    const current = await runDoltCommand(
+      binaryPath,
+      ['--data-dir', dataDir, 'sql', '-q', 'SELECT active_branch()', '-r', 'csv'],
+      { timeoutMs: 10_000 },
+    );
+    if (current.stdout.includes(branch)) {
+      return;
+    }
+    const checkout = await runDoltCommand(binaryPath, ['--data-dir', dataDir, 'checkout', branch], {
+      timeoutMs: 10_000,
+    });
+    if (checkout.exitCode === 0) {
+      return;
+    }
+    // Branch does not exist yet (e.g. first `fetch` materializing origin/<branch>):
+    // create it at the current head.
+    const create = await runDoltCommand(
+      binaryPath,
+      ['--data-dir', dataDir, 'checkout', '-b', branch],
+      { timeoutMs: 10_000 },
+    );
+    if (create.exitCode !== 0) {
+      throw new PushError('checkout', create.stderr.trim() || create.stdout.trim());
+    }
+  }
+
+  private async importTable(
+    binaryPath: string,
+    dataDir: string,
+    table: LocalCommitTable,
+  ): Promise<void> {
+    if (!SAFE_TABLE_RE.test(table.name)) {
+      throw new PushError('import', `refusing to import table with unsafe name "${table.name}"`);
+    }
+    const create = await runDoltCommand(
+      binaryPath,
+      ['--data-dir', dataDir, 'sql', '-q', table.schema],
+      { timeoutMs: 30_000 },
+    );
+    if (create.exitCode !== 0) {
+      if (!create.stderr.toLowerCase().includes('already exists')) {
+        throw new PushError(`create ${table.name}`, create.stderr.trim());
+      }
+      const truncate = await runDoltCommand(
+        binaryPath,
+        ['--data-dir', dataDir, 'sql', '-q', `TRUNCATE TABLE ${table.name}`],
+        { timeoutMs: 30_000 },
+      );
+      if (truncate.exitCode !== 0) {
+        throw new PushError(`truncate ${table.name}`, truncate.stderr.trim());
+      }
+    }
+
+    const lines = table.data
+      .replace(/\r/g, '')
+      .split('\n')
+      .filter((l) => l.length > 0);
+    if (lines.length <= 1) {
+      return; // header only → table created/emptied, no rows
+    }
+    const columns = parseCsvLine(lines[0] ?? '');
+    for (let i = 1; i < lines.length; i++) {
+      const values = parseCsvLine(lines[i] ?? '');
+      if (values.length !== columns.length) {
+        throw new PushError(
+          'import',
+          `row ${i} of ${table.name} has ${values.length} cols, expected ${columns.length}`,
+        );
+      }
+      const cols = columns.map((c) => `\`${c}\``).join(', ');
+      const vals = values.map(sqlLiteral).join(', ');
+      const insert = await runDoltCommand(
+        binaryPath,
+        [
+          '--data-dir',
+          dataDir,
+          'sql',
+          '-q',
+          `INSERT INTO ${table.name} (${cols}) VALUES (${vals})`,
+        ],
+        { timeoutMs: 30_000 },
+      );
+      if (insert.exitCode !== 0) {
+        throw new PushError(`insert ${table.name}`, insert.stderr.trim());
+      }
     }
   }
 
@@ -328,6 +547,22 @@ export class VersioningLocalService {
     );
     if (result.exitCode !== 0) {
       throw new PushError('sql export', result.stderr);
+    }
+    return result.stdout;
+  }
+
+  private async exportTableSchema(
+    binaryPath: string,
+    dataDir: string,
+    table: string,
+  ): Promise<string> {
+    const result = await runDoltCommand(
+      binaryPath,
+      ['--data-dir', dataDir, 'schema', 'export', table],
+      { timeoutMs: 10_000 },
+    );
+    if (result.exitCode !== 0) {
+      throw new PushError('schema export', result.stderr);
     }
     return result.stdout;
   }

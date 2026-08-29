@@ -4,7 +4,9 @@ import type {
   ImportedCommit,
   LogCommitEntry,
   MergeResult,
+  PullCommitsResult,
   PushCommitsResult,
+  RepoRef,
   RepoRoleAssignment,
   RepoSummary,
   RepoSyncPreferenceSummary,
@@ -151,6 +153,23 @@ export class VersioningService {
       await this.sessionService.mintAccessToken(),
       repoId,
       commits,
+    );
+  }
+
+  async fetchRefs(repoId: string): Promise<RepoRef[]> {
+    return this.versioningApi.fetchRefs(await this.sessionService.mintAccessToken(), repoId);
+  }
+
+  async pullCommits(
+    repoId: string,
+    branch: string,
+    fromHash: string | null,
+  ): Promise<PullCommitsResult> {
+    return this.versioningApi.pullCommits(
+      await this.sessionService.mintAccessToken(),
+      repoId,
+      branch,
+      fromHash,
     );
   }
 }
