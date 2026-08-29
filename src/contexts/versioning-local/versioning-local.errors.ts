@@ -34,12 +34,13 @@ export class PushError extends Error {
   }
 }
 
-export class PushNoUpstreamError extends Error {
-  constructor(repo: string) {
-    super(
-      `No upstream configured for "${repo}". Make sure the project has been initialized and linked to a remote repo.`,
-    );
-    this.name = 'PushNoUpstreamError';
+export class LocalRepoInitError extends Error {
+  constructor(
+    readonly repo: string,
+    readonly stderr: string,
+  ) {
+    super(`Failed to initialize the local Dolt repo for "${repo}": ${stderr || '(no stderr)'}`);
+    this.name = 'LocalRepoInitError';
   }
 }
 
