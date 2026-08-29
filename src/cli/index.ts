@@ -22,6 +22,12 @@ import {
   TransferAbortedError,
 } from '../contexts/dataflow';
 import {
+  createMysqlEmbeddedService,
+  LocalServerNotRunningError,
+  LocalServerPortInUseError,
+  LocalServerStartError,
+} from '../contexts/mysql-embedded';
+import {
   createSessionService,
   InvalidCredentialsError,
   NoActiveSessionError,
@@ -700,6 +706,82 @@ async function runVersion(): Promise<number> {
   return 0;
 }
 
+async function runStart(args: string[]): Promise<number> {
+  const [repo] = args;
+  if (!repo) {
+    printError('Usage: deltix start <repo>');
+    return 1;
+  }
+  try {
+    const state = await createMysqlEmbeddedService().start(repo);
+    printSuccess(`Local Dolt SQL server started for ${repo}`, {
+      host: '127.0.0.1',
+      port: state.port,
+      pid: state.pid,
+      dataDir: state.dataDir,
+    });
+    return 0;
+  } catch (err) {
+    return handleLocalServerError(err);
+  }
+}
+
+async function runStop(args: string[]): Promise<number> {
+  const [repo] = args;
+  if (!repo) {
+    printError('Usage: deltix stop <repo>');
+    return 1;
+  }
+  try {
+    await createMysqlEmbeddedService().stop(repo);
+    printSuccess(`Local Dolt SQL server stopped for ${repo}`);
+    return 0;
+  } catch (err) {
+    return handleLocalServerError(err);
+  }
+}
+
+async function runStatus(args: string[]): Promise<number> {
+  const [repo] = args;
+  if (!repo) {
+    printError('Usage: deltix status <repo>');
+    return 1;
+  }
+  try {
+    const status = await createMysqlEmbeddedService().status(repo);
+    if (status.running) {
+      printSuccess(`Local Dolt SQL server is running for ${repo}`, {
+        host: '127.0.0.1',
+        port: status.port,
+        pid: status.pid,
+        dataDir: status.dataDir,
+      });
+    } else {
+      printInfo(`Local Dolt SQL server is not running for ${repo}`);
+    }
+    return 0;
+  } catch (err) {
+    return handleLocalServerError(err);
+  }
+}
+
+function handleLocalServerError(err: unknown): number {
+  if (err instanceof LocalServerPortInUseError) {
+    printError(err.message);
+    return 2;
+  }
+  if (err instanceof LocalServerNotRunningError) {
+    printError(err.message);
+    return 1;
+  }
+  if (err instanceof LocalServerStartError) {
+    printError(err.message);
+    return 1;
+  }
+  printError(`Local server command failed: ${String(err)}`);
+  return 1;
+}
+
 export async function runCli(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
 
@@ -710,6 +792,12 @@ export async function runCli(argv: string[]): Promise<number> {
     case '--version':
     case '-v':
       return runVersion();
+    case 'start':
+      return runStart(rest);
+    case 'stop':
+      return runStop(rest);
+    case 'status':
+      return runStatus(rest);
     case 'login':
       return runLogin(rest);
     case 'logout':
@@ -737,8 +825,11 @@ export async function runCli(argv: string[]): Promise<number> {
     default:
       printLines([
         'Deltix-Client versioning parity with Deltix-Server Fase 5',
-        'Usage: deltix <version|configure|login|logout|whoami|push|pull|repo|branch|merge|log|diff|roles|sync-prefs> [...args]',
+        'Usage: deltix <version|configure|login|logout|whoami|push|pull|repo|branch|merge|log|diff|roles|sync-prefs|start|stop|status> [...args]',
         '  deltix configure',
+        '  deltix start <repo>',
+        '  deltix stop <repo>',
+        '  deltix status <repo>',
         '  deltix repo create <repo>',
         '  deltix repo list',
         '  deltix repo get <repo>',
