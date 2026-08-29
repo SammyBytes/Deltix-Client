@@ -22,7 +22,10 @@ describe.skipIf(!available)(
       await rm(home, { recursive: true, force: true });
     });
 
-    it('starts a real dolt sql-server, reports it running, then stops it', async () => {
+    it('starts a real dolt sql-server, reports it running, then stops it', {
+      timeout: 60_000,
+    }, async () => {
+      // cold-start of dolt sql-server can take >5s (bun default)
       process.env.DELTIX_HOME = home;
       process.env.DELTIX_LOCAL_PORT = String(port);
       __resetEnvCacheForTests();

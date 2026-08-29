@@ -126,18 +126,29 @@ export class MysqlEmbeddedService {
       'root',
     ];
 
-    const spawned = this.spawn(binaryPath, args, { cwd: dataDir });
+    let exited = false;
+    const spawned = this.spawn(binaryPath, args, {
+      cwd: dataDir,
+      onExit: () => {
+        exited = true;
+      },
+    });
     this.deps.onSpawned?.(spawned, args);
 
     const ready = await this.waitForPort(this.localHost, this.localPort, this.readyTimeoutMs);
     if (!ready) {
-      try {
-        process.kill(spawned.pid, 0); // throws ESRCH if the process already died
-      } catch {
+      // Never leave an orphaned server behind. Decide the failure by whether
+      // the process we spawned already exited, rather than probing its PID.
+      if (exited) {
         throw new LocalServerStartError(
           repo,
           'the Dolt server process exited before becoming ready (see the server stderr for details)',
         );
+      }
+      try {
+        process.kill(spawned.pid, 'SIGTERM');
+      } catch {
+        // Already gone — nothing to clean up.
       }
       throw new LocalServerPortInUseError(this.localHost, this.localPort);
     }

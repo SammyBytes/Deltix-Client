@@ -7,6 +7,7 @@ import type { BackgroundProcess } from '../../../src/acl/dolt-exec';
 import type { BinaryManager } from '../../../src/contexts/binary-manager';
 import {
   LocalServerNotRunningError,
+  LocalServerStartError,
   type MysqlEmbeddedDeps,
   MysqlEmbeddedService,
 } from '../../../src/contexts/mysql-embedded';
@@ -18,45 +19,42 @@ function ensureInstalled(): Pick<BinaryManager, 'ensureInstalled'> {
   return { ensureInstalled: async () => '/fake/dolt' };
 }
 
-function fakeSpawn(pid: number) {
-  return (
-    _binaryPath: string,
-    _args: string[],
-    _options: { cwd?: string; onExit?: (code: number | null, signal: string | null) => void },
-  ): BackgroundProcess => {
-    return { pid, stderr: new EventEmitter() as unknown as BackgroundProcess['stderr'] };
-  };
+interface SpawnBehavior {
+  pid: number;
+  /** When true, the fake process reports an immediate exit via onExit. */
+  exitImmediately?: boolean;
 }
 
-function makeService(overrides: Partial<MysqlEmbeddedDeps> = {}): {
+function makeService(
+  overrides: Partial<MysqlEmbeddedDeps> = {},
+  behavior: SpawnBehavior = { pid: process.pid },
+): {
   service: MysqlEmbeddedService;
   spawnCalls: string[][];
-  waitForCalls: number;
 } {
   const spawnCalls: string[][] = [];
-  const tracker = {
-    waitForCalls: 0,
-  };
-  return {
-    spawnCalls,
-    waitForCalls: 0,
-    service: new MysqlEmbeddedService({
-      homeDir: overrides.homeDir ?? '/tmp/mysql-embedded-test',
-      localHost: '127.0.0.1',
-      localPort: 3306,
-      binaryManager: ensureInstalled(),
-      readyTimeoutMs: 5_000,
-      spawn: (bin, args, opts) => {
-        spawnCalls.push(args);
-        return fakeSpawn(REAL_ALIVE_PID)(bin, args, opts as never);
-      },
-      waitForPort: async () => {
-        tracker.waitForCalls += 1;
-        return overrides.ready ?? true;
-      },
-      ...overrides,
-    }),
-  };
+  const waitForCalls: number[] = [];
+  const service = new MysqlEmbeddedService({
+    homeDir: overrides.homeDir ?? '/tmp/mysql-embedded-test',
+    localHost: '127.0.0.1',
+    localPort: 3306,
+    binaryManager: ensureInstalled(),
+    readyTimeoutMs: 100,
+    spawn: (_bin, args, opts) => {
+      spawnCalls.push(args);
+      if (behavior.exitImmediately) opts?.onExit?.(0, null);
+      return {
+        pid: behavior.pid,
+        stderr: new EventEmitter() as unknown as BackgroundProcess['stderr'],
+      };
+    },
+    waitForPort: async () => {
+      waitForCalls.push(1);
+      return overrides.ready ?? true;
+    },
+    ...overrides,
+  });
+  return { service, spawnCalls };
 }
 
 describe('mysql-embedded/mysql-embedded.service (unit, mocks)', () => {
@@ -94,11 +92,22 @@ describe('mysql-embedded/mysql-embedded.service (unit, mocks)', () => {
     await rm(home, { recursive: true, force: true });
   });
 
-  it('start() throws LocalServerStartError when the port never becomes ready', async () => {
+  it('start() reports a port already in use when readiness fails but the process is alive', async () => {
     const home = await mkdtemp(join(tmpdir(), 'deltix-me-timeout-'));
-    const { service } = makeService({ homeDir: home, ready: false });
+    const { service } = makeService({ homeDir: home, ready: false }, { pid: 8_999_999 });
 
     await expect(service.start('repo')).rejects.toThrow(/already in use/);
+    await rm(home, { recursive: true, force: true });
+  });
+
+  it('start() reports the server exited when readiness fails and the process died', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'deltix-me-crashed-'));
+    const { service } = makeService(
+      { homeDir: home, ready: false },
+      { pid: 8_999_999, exitImmediately: true },
+    );
+
+    await expect(service.start('repo')).rejects.toBeInstanceOf(LocalServerStartError);
     await rm(home, { recursive: true, force: true });
   });
 
