@@ -41,6 +41,27 @@ and pushing your data straight from your machine.
   re-verified before every run, so a tampered or corrupted binary is refused
   and reinstalled instead of trusted.
 
+### Added
+
+- **`mysql-embedded` context + `deltix start` / `stop` / `status`.** Managed
+  lifecycle of a local **Dolt SQL server** (`dolt sql-server`) bound to
+  loopback — one process per local repo checkout — giving you a real,
+  MySQL-compatible Deltix database engine locally with **zero dependency on a
+  pre-installed MySQL service**. `start` resolves a verified Dolt binary,
+  launches the server on `127.0.0.1:<port>`, waits for it to accept
+  connections, and records the run state; `status` reports whether it's alive;
+  `stop` shuts it down. State lives under `~/.deltix/repos/<repo>` (data) and
+  `~/.deltix/run/<repo>.json` (run state).
+- **`DELTIX_LOCAL_HOST` / `DELTIX_LOCAL_PORT`** env vars (default
+  `127.0.0.1:3306`) and persisted `localPort` / `localDoltBinPath` `configure`
+  fields, so you can avoid colliding with a host MySQL service.
+- **`spawnBackgroundProcess`** ACL helper in `src/acl/dolt-exec.ts` for
+  launching the long-running Dolt server (same argv-array, no-shell-string
+  contract as every other external executable call).
+- **CI Dolt install step**: the GitHub Actions workflow now installs the pinned
+  Dolt binary so the `mysql-embedded` integration suite runs a real spawn →
+  status → stop lifecycle in CI (skipped locally when no Dolt is present).
+
 ## [0.4.3] - 2026-08-29
 
 **In plain terms:** `deltix push`/`pull` could fail with a confusing

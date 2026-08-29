@@ -26,6 +26,24 @@ jobs:
       - name: Unit tests
         run: bun run test:unit
 
+      - name: Install Dolt (for mysql-embedded integration tests)
+        run: |
+          set -euxo pipefail
+          VERSION="2.3.1"
+          ARCH="$(uname -m)"
+          case "${ARCH}" in
+            x86_64) A="amd64" ;;
+            aarch64) A="arm64" ;;
+            *) echo "unsupported arch ${ARCH}"; exit 1 ;;
+          esac
+          TARBALL="dolt-linux-${A}.tar.gz"
+          URL="https://github.com/dolthub/dolt/releases/download/v${VERSION}/${TARBALL}"
+          curl -fsSL -o "/tmp/${TARBALL}" "${URL}"
+          mkdir -p /tmp/dolt
+          tar -xzf "/tmp/${TARBALL}" -C /tmp/dolt
+          BIN="$(find /tmp/dolt -type f -name dolt -perm -u+x | head -n1)"
+          echo "DELTIX_DOLT_BIN_PATH=${BIN}" >> "${GITHUB_ENV}"
+
       - name: Integration tests
         run: bun run test:integration
 

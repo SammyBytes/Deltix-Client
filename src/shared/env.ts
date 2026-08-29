@@ -56,6 +56,11 @@ const envSchema = z.object({
   // Root directory for locally-managed Dolt state and the installed binary.
   // Defaults to `~/.deltix`; overridable so tests and CI can isolate state.
   DELTIX_HOME: z.string().min(1).optional(),
+  // Host/port the local `dolt sql-server` binds to (mysql-embedded context).
+  // Loopback-only by default; 3306 is the conventional MySQL port, overridable
+  // when the host already runs a real MySQL service.
+  DELTIX_LOCAL_HOST: z.string().min(1).default('127.0.0.1'),
+  DELTIX_LOCAL_PORT: z.coerce.number().int().positive().default(3306),
 });
 
 export type Env = z.infer<typeof envSchema>;
@@ -84,6 +89,8 @@ export function applyPersistedConfigDefaults(config: {
   grpcTlsServerNameOverride?: string;
   httpTlsCaPath?: string;
   httpTlsServerNameOverride?: string;
+  localPort?: number;
+  localDoltBinPath?: string;
 }): void {
   const fallback: Record<string, string | undefined> = {
     DELTIX_SERVER_URL: config.serverUrl,
@@ -97,6 +104,10 @@ export function applyPersistedConfigDefaults(config: {
     DELTIX_HTTP_TLS_CA_PATH: config.httpTlsCaPath ?? config.grpcTlsCaPath,
     DELTIX_HTTP_TLS_SERVER_NAME_OVERRIDE:
       config.httpTlsServerNameOverride ?? config.grpcTlsServerNameOverride,
+    // mysql-embedded: the local Dolt SQL server's bind port and the Dolt
+    // binary to use, so `deltix configure` can customise them once.
+    DELTIX_LOCAL_PORT: config.localPort?.toString(),
+    DELTIX_DOLT_BIN_PATH: config.localDoltBinPath,
   };
   for (const [key, value] of Object.entries(fallback)) {
     if (value !== undefined && Bun.env[key] === undefined) {

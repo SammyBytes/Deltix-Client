@@ -120,3 +120,41 @@ export async function runDoltOrThrow(
   }
   return result.stdout;
 }
+
+export interface BackgroundProcess {
+  pid: number;
+  stderr: import('node:stream').Readable;
+}
+
+/**
+ * Spawns an external executable as a detached background process (for a
+ * long-running server like `dolt sql-server`) and returns its PID plus a
+ * stderr stream the caller can tail for diagnostics. The child is `unref`'d
+ * so it keeps running after this process exits; the caller owns lifecycle
+ * management (PID file, `stop`), via `process.kill`.
+ *
+ * Same argv-array-only contract as `runCommand` (no shell string).
+ */
+export function spawnBackgroundProcess(
+  binaryPath: string,
+  args: string[],
+  options: { cwd?: string; onExit?: (code: number | null, signal: string | null) => void } = {},
+): BackgroundProcess {
+  const child = spawn(binaryPath, args, {
+    cwd: options.cwd,
+    env: { ...process.env },
+    detached: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
+  });
+  child.unref();
+  if (options.onExit) {
+    child.on('exit', (code, signal) => {
+      options.onExit?.(code, signal ? signal.toString() : null);
+    });
+  }
+  return {
+    pid: child.pid ?? -1,
+    stderr: child.stderr as import('node:stream').Readable,
+  };
+}

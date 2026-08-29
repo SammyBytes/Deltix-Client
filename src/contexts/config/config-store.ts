@@ -29,6 +29,19 @@ export interface StoredConfig {
    */
   httpTlsCaPath?: string;
   httpTlsServerNameOverride?: string;
+  /**
+   * Port the local `dolt sql-server` (mysql-embedded context) binds to when
+   * `deltix start` launches it. Optional — defaults to 3306, and is only
+   * persisted when `deltix configure` (or manual config editing) sets it,
+   * e.g. to avoid colliding with a pre-installed MySQL service.
+   */
+  localPort?: number;
+  /**
+   * Absolute path to a pre-installed Dolt binary to use instead of the one
+   * the binary-manager downloads. Optional; maps to `DELTIX_DOLT_BIN_PATH`
+   * (see `shared/env.ts#applyPersistedConfigDefaults`).
+   */
+  localDoltBinPath?: string;
 }
 
 export class ConfigStore {
