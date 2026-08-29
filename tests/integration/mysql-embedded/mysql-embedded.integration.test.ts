@@ -32,18 +32,21 @@ describe.skipIf(!available)(
 
       const service = createMysqlEmbeddedService();
       const repo = 'it-repo';
+      // Use a project root so the run exercises the per-checkout state path
+      // (data dir under ~/.deltix/projects/<hash>), not just repo-name keying.
+      const identity = { repo, projectRoot: home };
 
-      const started = await service.start(repo);
+      const started = await service.start(identity);
       expect(started.port).toBe(port);
 
-      const status = await service.status(repo);
+      const status = await service.status(identity);
       expect(status.running).toBe(true);
       expect(status.pid).toBe(started.pid);
 
-      const stopped = await service.stop(repo);
+      const stopped = await service.stop(identity);
       expect(stopped.stopped).toBe(true);
 
-      const after = await service.status(repo);
+      const after = await service.status(identity);
       expect(after.running).toBe(false);
     });
   },
