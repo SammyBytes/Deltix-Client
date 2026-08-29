@@ -9,6 +9,39 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.4.1] - 2026-08-28
+
+**In plain terms:** running `deltix configure` on Windows used to crash with
+a "broken pipe" error as soon as it started asking for your server address, so
+you could never finish setting up the client interactively on that machine.
+The interactive prompts are now built directly on a stable keyboard-input
+mechanism (instead of the one that was crashing), so `deltix configure` works
+on Windows, macOS and Linux. It also no longer hangs forever if the prompts
+are invoked without a keyboard attached (for example from a script or CI) —
+it simply keeps the defaults instead.
+
+### Fixed
+
+- **`deltix configure` crashed on Windows with `EPIPE: broken pipe`**: the
+  interactive prompts used `consola.prompt`, whose implementation writes
+  through a layer that can have its output stream closed mid-prompt on
+  Windows consoles / Bun single-file executables, surfacing as an unhandled
+  `EPIPE`. `promptText`/`promptConfirm` now read input directly via
+  `node:readline` over `process.stdin`/`process.stdout` with explicit `error`
+  handlers on both streams, which is stable across total terminals.
+- **Prompts could hang forever when stdin isn't a terminal**: if `configure`
+  was run with piped/closed stdin (e.g. unattended/CI), `readline` never
+  received a line and the prompt blocked indefinitely. `rawPrompt` now
+  resolves with an empty answer when stdin is not a TTY, so callers fall back
+  to their default — matching the "press Enter to keep the default"
+  behaviour without hanging.
+
+### Tests
+
+- Verified the compiled CLI: with stdin closed, `configure` completes using
+  defaults instead of hanging; the full unit suite (71) and the whole test
+  run (87) pass with lint clean after the change.
+
 ## [0.4.0] - 2026-08-28
 
 **In plain terms:** logging in and pushing/pulling against a server with a

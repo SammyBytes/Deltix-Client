@@ -13,6 +13,7 @@
  * place responsible for what a human sees on the terminal after running a
  * `deltix` command.
  */
+import { createInterface } from 'node:readline';
 import { consola } from 'consola';
 
 /** Prints a one-line success message, optionally followed by key/value details. */
@@ -84,8 +85,11 @@ export async function promptText(
   message: string,
   opts: { default?: string } = {},
 ): Promise<string> {
-  const answer = await consola.prompt(message, { type: 'text', default: opts.default });
-  return typeof answer === 'string' ? answer : (opts.default ?? '');
+  const answer = await rawPrompt(
+    `${message}${opts.default !== undefined ? ` (${opts.default})` : ''}: `,
+  );
+  const trimmed = answer.trim();
+  return trimmed !== '' ? trimmed : (opts.default ?? '');
 }
 
 /** Prompts the user for a yes/no confirmation (e.g. trusting a fetched certificate). */
@@ -93,8 +97,53 @@ export async function promptConfirm(
   message: string,
   opts: { default?: boolean } = {},
 ): Promise<boolean> {
-  const answer = await consola.prompt(message, { type: 'confirm', default: opts.default ?? false });
-  return typeof answer === 'boolean' ? answer : (opts.default ?? false);
+  const hint = opts.default === undefined || opts.default === false ? ' (y/N)' : ' (Y/n)';
+  const answer = await rawPrompt(`${message}${hint}: `);
+  const normalized = answer.trim().toLowerCase();
+  if (normalized === '') return opts.default ?? false;
+  return ['y', 'yes'].includes(normalized);
+}
+
+/**
+ * Reads one line from the user via `node:readline` with a stable error
+ * handler on both streams.
+ *
+ * `consola.prompt` (used previously) crashed with an unhandled
+ * `EPIPE: broken pipe` on the compiled Windows binary — its prompt writes
+ * through a layer that can have its output stream closed mid-prompt, which
+ * surfaces as an EPIPE on Windows consoles / Bun single-file executables.
+ * A raw `node:readline` interface over `process.stdin`/`process.stdout`,
+ * with `error` listeners attached to both, is stable across Linux,
+ * macOS and Windows terminals.
+ */
+function rawPrompt(query: string): Promise<string> {
+  const input = process.stdin;
+  const output = process.stdout;
+  const onError = () => {}; // swallow EPIPE on Windows consoles
+  input.on('error', onError);
+  output.on('error', onError);
+  const rl = createInterface({ input, output });
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (ans: string) => {
+      if (settled) return;
+      settled = true;
+      rl.close();
+      input.off('error', onError);
+      output.off('error', onError);
+      resolve(ans);
+    };
+    // If stdin is not an interactive terminal (piped/closed, e.g. running
+    // unattended in CI), readline never receives a line and the prompt would
+    // hang forever. Resolve with an empty answer so callers fall back to their
+    // default — matching the "press Enter to keep the default" behaviour.
+    if (!input.isTTY) {
+      done('');
+      return;
+    }
+    rl.question(query, done);
+    rl.on('close', () => done(''));
+  });
 }
 
 /** Prints the plain usage/help lines (no color coding needed here). */
