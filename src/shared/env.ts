@@ -45,6 +45,17 @@ const envSchema = z.object({
   // below the server's ticket TTL (default 120s) so the sliding window
   // never lapses mid-transfer.
   DELTIX_HEARTBEAT_INTERVAL_MS: z.coerce.number().int().positive().default(30_000),
+  // Path to an existing `dolt` binary to use instead of the one the
+  // binary-manager downloads/installs into `~/.deltix/bin/`. When set, the
+  // binary-manager trusts it as-is (no download, no integrity re-verify it
+  // did not record). Intended for CI/preinstalled setups.
+  DELTIX_DOLT_BIN_PATH: z.string().min(1).optional(),
+  // Dolt release version the binary-manager installs when no binary is
+  // present on PATH. Pinned to match the version Deltix-Server installs.
+  DELTIX_DOLT_VERSION: z.string().min(1).default('2.3.1'),
+  // Root directory for locally-managed Dolt state and the installed binary.
+  // Defaults to `~/.deltix`; overridable so tests and CI can isolate state.
+  DELTIX_HOME: z.string().min(1).optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

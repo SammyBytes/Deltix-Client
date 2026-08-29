@@ -9,6 +9,38 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [Unreleased]
+
+**In plain terms:** the CLI now manages its own local copy of the Dolt
+database-engine binary, downloading and verifying it automatically into your
+home folder the first time it's needed. This is the foundation for running a
+local Deltix repo (`deltix start`) and, later in the same roadmap, committing
+and pushing your data straight from your machine.
+
+### Added
+
+- **`binary-manager` context.** First known-good step of the
+  `mysql-embedded` roadmap. `BinaryManager#ensureInstalled()` resolves a Dolt
+  binary following, in order: `DELTIX_DOLT_BIN_PATH`, a matching `dolt` on
+  `PATH`, an already-installed copy under `~/.deltix/bin/dolt-<version>` that
+  passes its recorded SHA-256, or a fresh download of the official release
+  tarball over HTTPS (extracted with `tar`, then hash-recorded for future
+  re-verification).
+- **`src/acl/dolt-exec.ts`.** The one place that shells out to external
+  executables (`dolt`, `tar`, `which`), always passing an argv array (never a
+  concatenated shell string) so no dynamic value can be interpreted as a
+  shell metacharacter. Exposes `runCommand`, `runDoltCommand`,
+  `runDoltOrThrow`, `whichBinary`, and `DoltExecError`.
+- **Dolt version pinning.** `DELTIX_DOLT_VERSION` (default `2.3.1`, matching
+  Deltix-Server) and `DELTIX_HOME` env vars; new `src/shared/env.ts` fields.
+
+### Security
+
+- Only an **unmodified official Dolt release artifact** is ever used — never
+  compiled, patched, or altered locally — and its on-disk SHA-256 is
+  re-verified before every run, so a tampered or corrupted binary is refused
+  and reinstalled instead of trusted.
+
 ## [0.4.3] - 2026-08-29
 
 **In plain terms:** `deltix push`/`pull` could fail with a confusing
