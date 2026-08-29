@@ -207,7 +207,8 @@ function handleSyncError(err: unknown, action: string): number {
 }
 
 async function runPull(args: string[]): Promise<number> {
-  const [repoArg] = args;
+  const abort = args.includes('--abort');
+  const repoArg = args.find((a) => !a.startsWith('--'));
   const identity = await resolveServerIdentity(repoArg);
   if (!identity) {
     return 1;
@@ -215,23 +216,49 @@ async function runPull(args: string[]): Promise<number> {
   const branch = 'main';
   try {
     const local = await newLocalService();
+
+    if (abort) {
+      await local.mergeAbort(identity, branch);
+      printSuccess(`Merge aborted for ${identity.repo}`);
+      return 0;
+    }
+
     const from = await local.getRemoteHead(identity, branch);
     const localHead = await local.getBranchHead(identity, branch);
-
-    // Fast-forward only: refuse when the local branch has commits the server
-    // doesn't (divergent merge is a later phase).
-    if (from && localHead && localHead !== from) {
-      printError(
-        `Local "${identity.repo}" has commits not on the server. Run \`deltix push\` first (divergent merge is not yet supported).`,
-      );
-      return 1;
-    }
+    const diverged = Boolean(from && localHead && localHead !== from);
 
     const { commits, serverHead } = await createVersioningService().pullCommits(
       identity.repo,
       branch,
       from,
     );
+
+    if (diverged) {
+      // Materialize the server's new commits onto origin/<branch>, then merge
+      // that into the local branch (git pull == fetch + merge).
+      if (commits.length > 0) {
+        await local.applyCommits(identity, `origin/${branch}`, commits);
+      }
+      const result = await local.mergeFromRemote(identity, branch);
+      if (result.status === 'conflicts') {
+        printError(
+          `Merge conflicts in ${identity.repo}: ${result.conflicts
+            .map((c) => `${c.table} (${c.numConflicts})`)
+            .join(', ')}.`,
+        );
+        printInfo('Resolve them in the local Dolt repo, or run `deltix pull --abort`.');
+        return 1;
+      }
+      const merged = await local.getBranchHead(identity, branch);
+      if (merged) {
+        await local.advanceRemoteRef(identity, branch, merged);
+      }
+      printSuccess(`Merged ${serverHead ? 'server changes' : 'origin'} into ${identity.repo}`, {
+        head: merged,
+      });
+      return 0;
+    }
+
     if (commits.length === 0) {
       if (serverHead) {
         await local.advanceRemoteRef(identity, branch, serverHead);
@@ -1052,7 +1079,7 @@ export async function runCli(argv: string[]): Promise<number> {
         '  deltix init <repo>',
         '  deltix commit <message> [tables...]',
         '  deltix push [<repo>]',
-        '  deltix pull [<repo>]',
+        '  deltix pull [<repo>] [--abort]',
         '  deltix fetch [<repo>]',
         '  deltix start [<repo>]',
         '  deltix stop [<repo>]',

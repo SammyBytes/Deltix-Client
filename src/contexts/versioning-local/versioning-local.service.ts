@@ -33,6 +33,15 @@ export interface LocalCommitWithData {
   tables: LocalCommitTable[];
 }
 
+export interface MergeConflictSummary {
+  table: string;
+  numConflicts: number;
+}
+
+export type PullMergeResult =
+  | { status: 'merged' }
+  | { status: 'conflicts'; conflicts: MergeConflictSummary[] };
+
 export interface VersioningLocalDeps {
   homeDir: string;
   binaryManager: Pick<BinaryManager, 'ensureInstalled'>;
@@ -322,10 +331,13 @@ export class VersioningLocalService {
   private async checkoutBranch(binaryPath: string, dataDir: string, branch: string): Promise<void> {
     const current = await runDoltCommand(
       binaryPath,
-      ['--data-dir', dataDir, 'sql', '-q', 'SELECT active_branch()', '-r', 'csv'],
+      ['--data-dir', dataDir, 'sql', '-q', 'SELECT active_branch() AS b', '-r', 'csv'],
       { timeoutMs: 10_000 },
     );
-    if (current.stdout.includes(branch)) {
+    // Exact compare, not substring: 'origin/main' contains 'main', so a naive
+    // includes() would wrongly conclude we are already on the target branch.
+    const active = current.stdout.split('\n').slice(1).join('').trim();
+    if (active === branch) {
       return;
     }
     const checkout = await runDoltCommand(binaryPath, ['--data-dir', dataDir, 'checkout', branch], {
@@ -490,20 +502,95 @@ export class VersioningLocalService {
     dataDir: string,
     query: string,
   ): Promise<DoltLogRow[]> {
+    return this.queryRows(binaryPath, dataDir, query) as Promise<DoltLogRow[]>;
+  }
+
+  private async queryRows(
+    binaryPath: string,
+    dataDir: string,
+    query: string,
+  ): Promise<Record<string, string>[]> {
     const result = await runDoltCommand(
       binaryPath,
       ['--data-dir', dataDir, 'sql', '-q', query, '-r', 'json'],
       { timeoutMs: 30_000 },
     );
     if (result.exitCode !== 0) {
-      throw new PushError('log', result.stderr.trim() || result.stdout.trim());
+      throw new PushError('sql', result.stderr.trim() || result.stdout.trim());
     }
     const trimmed = result.stdout.trim();
     if (!trimmed) {
       return [];
     }
-    const parsed = JSON.parse(trimmed) as { rows?: DoltLogRow[] };
-    return parsed.rows ?? [];
+    return (JSON.parse(trimmed) as { rows?: Record<string, string>[] }).rows ?? [];
+  }
+
+  /**
+   * Merge the remote-tracking ref `origin/<branch>` into the local `<branch>`
+   * (assumed already updated by a preceding fetch). Returns `merged` on a
+   * clean/fast-forward merge, or `conflicts` (leaving the repo mid-merge) when
+   * Dolt reports content conflicts.
+   */
+  async mergeFromRemote(id: LocalServerIdentity, branch = 'main'): Promise<PullMergeResult> {
+    const dataDir = computeLocalDataDir(this.deps.homeDir, id);
+    if (!existsSync(dataDir)) {
+      throw new CommitDataDirNotFoundError(id.repo);
+    }
+    const binaryPath = await this.deps.binaryManager.ensureInstalled();
+    await this.ensureLocalRepo(binaryPath, dataDir, id.repo);
+    await this.checkoutBranch(binaryPath, dataDir, branch);
+
+    const merge = await runDoltCommand(
+      binaryPath,
+      [
+        '--data-dir',
+        dataDir,
+        'merge',
+        remoteRefName(branch),
+        '-m',
+        `Merge ${remoteRefName(branch)} into ${branch}`,
+      ],
+      { timeoutMs: 60_000 },
+    );
+    if (merge.exitCode === 0) {
+      return { status: 'merged' };
+    }
+    const conflicts = await this.readConflicts(binaryPath, dataDir);
+    if (conflicts.length > 0) {
+      return { status: 'conflicts', conflicts };
+    }
+    throw new PushError('merge', merge.stderr.trim() || merge.stdout.trim());
+  }
+
+  /** Abort an in-progress merge (e.g. after `deltix pull --abort`). */
+  async mergeAbort(id: LocalServerIdentity, branch = 'main'): Promise<void> {
+    const dataDir = computeLocalDataDir(this.deps.homeDir, id);
+    if (!existsSync(dataDir)) {
+      throw new CommitDataDirNotFoundError(id.repo);
+    }
+    const binaryPath = await this.deps.binaryManager.ensureInstalled();
+    await this.ensureLocalRepo(binaryPath, dataDir, id.repo);
+    await this.checkoutBranch(binaryPath, dataDir, branch);
+    const result = await runDoltCommand(binaryPath, ['--data-dir', dataDir, 'merge', '--abort'], {
+      timeoutMs: 30_000,
+    });
+    if (result.exitCode !== 0) {
+      throw new PushError('merge --abort', result.stderr.trim() || result.stdout.trim());
+    }
+  }
+
+  private async readConflicts(
+    binaryPath: string,
+    dataDir: string,
+  ): Promise<MergeConflictSummary[]> {
+    const rows = await this.queryRows(
+      binaryPath,
+      dataDir,
+      'SELECT `table`, num_conflicts FROM dolt_conflicts',
+    );
+    return rows
+      .filter((row) => row.table)
+      .map((row) => ({ table: row.table as string, numConflicts: Number(row.num_conflicts ?? 0) }));
   }
 
   private async getChangedTables(
