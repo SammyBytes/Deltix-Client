@@ -4,110 +4,170 @@
 [![Release](https://github.com/SammyBytes/Deltix-Client/actions/workflows/release.yml/badge.svg)](https://github.com/SammyBytes/Deltix-Client/actions/workflows/release.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-Developer CLI for **Deltix** — Git-style version control for relational database schemas and data.
+Git-style version control for relational databases — from your terminal.
+Deltix-Client is a single-binary CLI that runs a local [Dolt](https://github.com/dolthub/dolt)
+engine and syncs commits with a [Deltix-Server](https://github.com/SammyBytes/Deltix-Server)
+control plane.
 
-> Licensed under the **MIT License**. See [`LICENSE`](./LICENSE).
+MIT licensed. See [`LICENSE`](./LICENSE).
 
-## What this is
+---
 
-Deltix-Client is a lightweight Bun/TypeScript CLI that:
-- Provides intuitive terminal commands (`deltix login`, `deltix logout`, `deltix whoami`,
-  `deltix push`, `deltix pull`, `deltix branch ...`, `deltix merge`, `deltix log`, `deltix diff`,
-  `deltix roles ...`, `deltix sync-prefs ...`).
-- Authenticates against the Deltix-Server REST API to obtain a short-lived (2 minute TTL) gRPC
-  transfer ticket.
-- Streams data fragments to the server's local staging area over mTLS gRPC and reports transfer
-  progress, with heartbeats to keep long-running transfers alive.
-- Validates arguments and local configuration before touching the network.
+## Install
 
-## What this is NOT
+Grab the binary for your platform from the
+[latest release](https://github.com/SammyBytes/Deltix-Client/releases/latest)
+(Linux/macOS/Windows, x64 and arm64), put it on your `PATH`, and you're done —
+no Bun runtime needed.
 
-- It does **not** decide final permissions — it never assumes access to an Add-on or repository
-  without a signed response from the server.
-- It does **not** store private keys or corporate secrets — only a session refresh token, on disk
-  with restrictive permissions.
-- It does **not** write to NAS storage directly — it never touches network volumes; all data
-  movement happens exclusively over gRPC to the server.
+```bash
+chmod +x deltix-linux-x64 && sudo mv deltix-linux-x64 /usr/local/bin/deltix
+deltix version
+```
+
+For CI/automation, there's also a container image:
+
+```bash
+docker pull ghcr.io/sammybytes/deltix-client:latest
+```
+
+The first time a command needs Dolt, the client downloads and SHA-256-verifies
+a pinned official Dolt binary into `~/.deltix/bin/` — you never install a
+database server yourself.
+
+---
+
+## Quick start
+
+The everyday loop mirrors Git. Everything runs inside a project folder that
+holds a `.deltix/config.toml` (like `.git`).
+
+```bash
+deltix configure                 # point at your Deltix-Server (once)
+deltix login <user> <password>   # authenticate
+
+# Work on an existing repo:
+deltix clone analytics           # fetch the full history into ./analytics
+cd analytics && deltix start     # run the local Dolt engine (MySQL on 127.0.0.1:3306)
+# ...change your data via any MySQL client...
+deltix commit "add customers"    # snapshot locally
+deltix push                      # send commits to the server
+deltix pull                      # bring the server's commits back (merge if needed)
+```
+
+Or start a brand-new repo from a folder you already have:
+
+```bash
+cd my-project
+deltix init analytics            # bind this folder to repo "analytics" + create local Dolt repo
+deltix start                     # start the local engine
+# ...create tables / data via MySQL on 127.0.0.1:3306...
+deltix commit "seed data"
+deltix push                      # first push auto-creates the repo on the server (if you have permission)
+```
+
+---
+
+## Commands
+
+### Setup & auth
+| Command | What it does |
+|---|---|
+| `deltix configure` | One-time connection setup (server URL, TLS). Saved to `~/.deltix/config.json`. |
+| `deltix login <user> <pass>` | Authenticate; stores a refresh token. |
+| `deltix logout` / `deltix whoami` | End / show the active session. |
+| `deltix version` | Client (and reachable server) version. |
+
+### Local workflow (git-like)
+| Command | What it does |
+|---|---|
+| `deltix clone <repo>` | Create `./<repo>`, bind it, and pull the full history. |
+| `deltix init <repo>` | Bind the current folder to a repo (creates `.deltix/` + local Dolt repo). |
+| `deltix start [<repo>]` | Start the local Dolt SQL server (loopback). |
+| `deltix stop [<repo>]` / `deltix status [<repo>]` | Stop / inspect the local engine. |
+| `deltix commit <message> [tables...]` | Snapshot the working tree (optionally only named tables). |
+| `deltix push [<repo>]` | Send your unpushed commits to the server. |
+| `deltix pull [<repo>]` | Fetch + merge the server's commits into your branch. |
+| `deltix pull --abort` | Undo an in-progress conflicted merge. |
+| `deltix fetch [<repo>]` | Update `origin/*` refs without touching your branch. |
+| `deltix branch local [<repo>]` | List local vs remote-tracking branches. |
+
+### Server / versioning
+| Command | What it does |
+|---|---|
+| `deltix repo create <repo>` / `list` / `get <repo>` | Provision and inspect repositories. |
+| `deltix branch list <repo>` | List branches on the server. |
+| `deltix branch create/checkout/delete <repo> <name>` | Manage server branches. |
+| `deltix merge <repo> <source> [target]` | Merge branches on the server. |
+| `deltix log <repo> [--branch=] [--limit=]` | Commit history. |
+| `deltix diff <repo> <from> <to>` | Row/schema diff between two refs. |
+| `deltix roles list/grant/revoke <repo> [user] [role]` | Per-repo access control (`reader`/`writer`/`admin`). |
+| `deltix sync-prefs get/set/dry-run <repo> ...` | Choose which tables version, with FK-closure preview. |
+
+---
+
+## How syncing works
+
+- **Push** sends commits (not loose files): the client reads the commits on your
+  branch that aren't on `origin/<branch>`, exports each changed table's schema
+  (DDL) and rows (CSV), and posts them to the server, which recreates them as
+  real Dolt commits with the original message and author.
+- **Pull** is the mirror: it downloads the commits you're missing and applies
+  them locally, fast-forwarding when clean or running a real `dolt merge` when
+  you and the server have diverged (conflicts are reported per table).
+- **Permissions** are enforced by the server, never the client: you need
+  `writer`/`admin` on a repo to push, and creating a new repo requires the
+  `canCreateRepos` permission (a global admin can grant it). Without it, a push
+  to an unknown repo is rejected and your work stays safely local.
+- **TLS is always on.** `deltix configure` can fetch and pin the server's
+  self-signed certificate (trust-on-first-use) for both the REST and gRPC
+  endpoints; connecting over a bare IP works without disabling verification.
+
+> The legacy whole-file gRPC transfer is retained only behind
+> `DELTIX_ENABLE_GRPC_TRANSFER=1` for rollback while the commit-based path is
+> confirmed, and is slated for removal.
+
+---
+
+## Configuration
+
+`deltix configure` writes defaults to `~/.deltix/config.json`. Any of these
+environment variables override it:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `DELTIX_SERVER_URL` | `http://127.0.0.1:9090` | REST control plane. |
+| `DELTIX_GRPC_HOST` / `DELTIX_GRPC_PORT` | `127.0.0.1` / `50051` | Transfer engine (pull/legacy). |
+| `DELTIX_HTTP_TLS_CA_PATH` / `DELTIX_GRPC_TLS_CA_PATH` | — | CA to trust a self-signed server. |
+| `DELTIX_HTTP_TLS_SERVER_NAME_OVERRIDE` / `DELTIX_GRPC_TLS_SERVER_NAME_OVERRIDE` | — | SNI name when connecting by IP. |
+| `DELTIX_LOCAL_HOST` / `DELTIX_LOCAL_PORT` | `127.0.0.1` / `3306` | Local Dolt SQL server. |
+| `DELTIX_HOME` | `~/.deltix` | Root for local state + Dolt binary. |
+| `DELTIX_DOLT_VERSION` / `DELTIX_DOLT_BIN_PATH` | `2.3.1` / — | Pinned Dolt version / preinstalled binary. |
+
+---
 
 ## Architecture
 
-Modular monolith organized by **bounded contexts** under `src/contexts/*` (no clean/hexagonal
-layering). See [`.github/copilot-instructions.md`](./.github/copilot-instructions.md) for the
-full set of engineering rules (architecture, security, licensing, testing, logging).
+A modular monolith organized by **bounded contexts** under `src/contexts/*`
+(no hexagonal layering). Process spawning is isolated in `src/acl/dolt-exec.ts`
+(argv arrays only — never a shell string); the binary is always resolved through
+`binary-manager` and integrity-checked.
 
-Contexts:
-- `config`: `deltix configure` interactive connection setup, persisted to `~/.deltix/config.json`.
-- `session`: `deltix login`/`logout`/`whoami`, local credential storage, JWT refresh handling.
-- `dataflow`, `heartbeat`: gRPC Push/Pull client + keep-alive against the Deltix-Server transfer
-  engine.
-- `versioning`: Fase 5 REST API parity for repo provisioning, branches, merge, log/diff, roles,
-  and sync preferences.
-- `binary-manager`, `mysql-embedded`: placeholders reserved for a future roadmap phase.
+| Context | Responsibility |
+|---|---|
+| `config` | `deltix configure` + persisted connection settings. |
+| `session` | Login/refresh, local credential storage. |
+| `local-project` | The `.deltix/config.toml` binding; per-checkout state. |
+| `binary-manager` | Resolve/download/verify the pinned Dolt binary. |
+| `mysql-embedded` | Local `dolt sql-server` lifecycle (`start`/`stop`/`status`). |
+| `versioning-local` | Local Dolt operations: commit, push export, pull apply, merge, branches, `origin/*` tracking. |
+| `versioning` | REST parity with the server: repos, branches, merge, log/diff, roles, sync-prefs, push/pull-commits. |
+| `dataflow`, `heartbeat` | Legacy gRPC transfer (behind the feature flag). |
 
+Full engineering rules (architecture, security, testing, logging) live in
+[`.github/copilot-instructions.md`](./.github/copilot-instructions.md).
 
-## CLI usage
-
-### First-time setup
-
-Run `deltix configure` once to set up how the CLI reaches your Deltix-Server (REST URL, gRPC
-host/port, and TLS trust options), instead of hand-setting environment variables:
-
-```bash
-deltix configure
-```
-
-If your server is reached by IP address rather than a hostname (e.g. `10.1.10.129`), the
-prompt will ask for a TLS server name override — this avoids the
-`ERR_INVALID_ARG_VALUE: The property 'options.servername' ... is not permitted` crash that
-occurs because TLS's SNI mechanism doesn't allow IP addresses as server names. Use the same
-name the server's certificate was issued for (`localhost` if you generated it with
-Deltix-Server's `bun run tls:server-cert` script). Settings are saved to
-`~/.deltix/config.json` and act only as *defaults* — any `DELTIX_*` environment variable you
-set explicitly always takes precedence.
-
-**Self-signed server certificates**: if `deltix configure` detects an `https://` server URL, it
-offers to fetch the server's certificate automatically instead of requiring you to copy a
-`.crt` file off the server by hand (`scp`/`ssh cat`, which commonly hits path or `sudo`/TTY
-friction). This works the same way SSH handles host keys (Trust-On-First-Use): the CLI connects,
-shows the certificate's SHA-256 fingerprint and subject/issuer, and only trusts it after you
-explicitly confirm the fingerprint matches what the server operator shared with you (e.g. from
-`install.sh`'s summary output). The confirmed certificate is saved to
-`~/.deltix/trusted-server.crt` and reused for **both** the REST API and the gRPC transfer engine
-— in a typical deployment both present the same certificate, so you only do this once. Decline
-the auto-fetch (or answer "no" to the trust prompt) to fall back to entering a `.crt` path
-manually.
-
-### Versioning parity with Deltix-Server Fase 5
-
-```bash
-deltix branch list <repo>
-deltix branch create <repo> <name>
-deltix branch checkout <repo> <name>
-deltix branch delete <repo> <name>
-deltix branch current <repo>
-deltix merge <repo> <sourceBranch> [targetBranch]
-deltix log <repo> [--branch=name] [--limit=N]
-deltix diff <repo> <from> <to>
-deltix roles list <repo>
-deltix roles grant <repo> <username> <reader|writer|admin>
-deltix roles revoke <repo> <username>
-deltix sync-prefs get <repo>
-deltix sync-prefs set <repo> <schema-only|schema-and-data> [tables...]
-deltix sync-prefs dry-run <repo> [tables...]
-```
-
-Examples:
-
-```bash
-deltix branch create analytics feature/backfill
-deltix branch checkout analytics feature/backfill
-deltix log analytics --branch=feature/backfill --limit=10
-deltix diff analytics main feature/backfill
-deltix merge analytics feature/backfill
-deltix roles grant analytics bob writer
-deltix sync-prefs set analytics schema-only customers orders
-deltix sync-prefs dry-run analytics orders
-```
+---
 
 ## Development
 
@@ -115,36 +175,17 @@ Requires [Bun](https://bun.sh) `>=1.4`.
 
 ```bash
 bun install
-bun run lint     # Biome
-bun test          # all tiers
+bun run lint          # Biome
 bun run test:unit
 bun run test:integration
 bun run test:smoke
-bun audit          # dependency vulnerability scan (also runs in CI)
+bun build ./src/cli/index.ts --compile --outfile dist/deltix
 ```
 
-## Installing / distribution
-
-The CLI compiles to a single native binary (`bun build --compile`, no Bun runtime required on
-the target machine). Two distribution paths:
-
-- **Binary release** (recommended for interactive/human use): download the binary for your OS/
-  arch from the [latest GitHub Release](https://github.com/SammyBytes/Deltix-Client/releases/latest)
-  (Linux, macOS, Windows — x64 and arm64).
-- **Container image** (for CI/automation running `deltix` from inside a pipeline):
-  ```bash
-  docker pull ghcr.io/sammybytes/deltix-client:latest
-  docker run --rm ghcr.io/sammybytes/deltix-client:latest --help
-  ```
-
-Both are published automatically by `.github/workflows/release.yml` on every `vX.Y.Z` tag.
+TDD is mandatory: failing test first, minimal implementation, refactor. No
+branch merges to `main` without unit + integration + smoke passing.
 
 ## Security
 
-See [`SECURITY.md`](./SECURITY.md) for the supported version policy, vulnerability reporting
-process (private, via GitHub Security Advisories), and this project's security baseline.
-
-## Testing philosophy
-
-TDD is mandatory: write the failing test first, then the minimal implementation, then refactor.
-No phase branch merges into `main` without unit, integration, and smoke tests passing. Fase 5 client parity now covers the server's versioning REST surface for branching, merge, history, repo ACLs, and sync preferences.
+See [`SECURITY.md`](./SECURITY.md) for the supported-version policy and how to
+report vulnerabilities privately.
