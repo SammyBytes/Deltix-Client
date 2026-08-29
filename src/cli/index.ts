@@ -548,15 +548,11 @@ async function runConfigure(): Promise<number> {
   let grpcTlsServerNameOverride: string | undefined;
   let grpcTlsCaPath: string | undefined;
 
-  if (isIpAddress) {
-    printInfo(
-      `"${grpcHost}" is an IP address. TLS requires a DNS-style server name for certificate ` +
-        'verification (SNI), so you must provide the name the server certificate was issued for.',
-    );
-    grpcTlsServerNameOverride = await promptText('TLS server name override', {
-      default: 'localhost',
-    });
-  }
+  // DNS names the server's certificate is actually valid for — read from the
+  // fetched certificate so we can *suggest* the right server-name override
+  // instead of hard-coding one. This is what makes bare-IP servers usable by
+  // any company's clients without manual guesswork.
+  let autoSuggestedOverride: string | undefined;
 
   const isHttps = serverUrl.trim().toLowerCase().startsWith('https://');
   if (isHttps) {
@@ -566,8 +562,32 @@ async function runConfigure(): Promise<number> {
       { default: true },
     );
     if (wantsAutoFetch) {
-      grpcTlsCaPath = await autoFetchAndTrustCertificate(grpcHost, grpcPort);
+      const fetched = await autoFetchAndTrustCertificate(grpcHost, grpcPort);
+      grpcTlsCaPath = fetched?.path;
+      autoSuggestedOverride =
+        fetched?.dnsNames.find((name) => !/^(\d{1,3}\.){3}\d{1,3}$|:/.test(name)) ?? undefined;
     }
+  }
+
+  if (isIpAddress) {
+    // Fall back to a stable, sensible default when the certificate's SAN
+    // didn't reveal a DNS name (e.g. a pre-existing cert with only an IP).
+    const overrideDefault = autoSuggestedOverride ?? 'localhost';
+    if (autoSuggestedOverride) {
+      printInfo(
+        `"${grpcHost}" is an IP address. TLS clients cannot verify a bare IP as a server name, ` +
+          `so this connection uses the DNS name the server's certificate identifies as — ` +
+          `suggested \`${autoSuggestedOverride}\` from the certificate.`,
+      );
+    } else {
+      printInfo(
+        `"${grpcHost}" is an IP address. TLS requires a DNS-style server name for certificate ` +
+          'verification (SNI), so you must provide the name the server certificate was issued for.',
+      );
+    }
+    grpcTlsServerNameOverride = await promptText('TLS server name override', {
+      default: overrideDefault,
+    });
   }
 
   if (!grpcTlsCaPath) {
@@ -598,14 +618,15 @@ const DEFAULT_TRUSTED_CERT_PATH = join(homedir(), '.deltix', 'trusted-server.crt
  * Fetches the server's certificate over a raw TLS handshake (with
  * validation disabled for that single bootstrap connection only), shows
  * its fingerprint, and — only after explicit user confirmation — writes it
- * to `~/.deltix/trusted-server.crt` and returns that path. Returns
- * `undefined` on failure or if the user declines to trust it, in which
- * case the caller falls back to prompting for a manual CA path.
+ * to `~/.deltix/trusted-server.crt` and returns that path along with the DNS
+ * names the certificate is valid for (the natural server-name override).
+ * Returns `undefined` on failure or if the user declines to trust it, in
+ * which case the caller falls back to prompting for a manual CA path.
  */
 async function autoFetchAndTrustCertificate(
   host: string,
   port: number,
-): Promise<string | undefined> {
+): Promise<{ path: string; dnsNames: string[] } | undefined> {
   printInfo(`Connecting to ${host}:${port} to fetch the server's certificate...`);
   let fetched: Awaited<ReturnType<typeof fetchServerCertificate>>;
   try {
@@ -638,7 +659,7 @@ async function autoFetchAndTrustCertificate(
   await mkdir(join(homedir(), '.deltix'), { recursive: true });
   await writeFile(DEFAULT_TRUSTED_CERT_PATH, fetched.pem, { mode: 0o600 });
   printSuccess(`Certificate saved to ${DEFAULT_TRUSTED_CERT_PATH}`);
-  return DEFAULT_TRUSTED_CERT_PATH;
+  return { path: DEFAULT_TRUSTED_CERT_PATH, dnsNames: fetched.dnsNames };
 }
 
 async function runVersion(): Promise<number> {

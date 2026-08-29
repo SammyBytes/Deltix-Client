@@ -25,6 +25,11 @@ export interface FetchedCertificate {
   subject: string;
   issuer: string;
   validTo: string;
+  /** DNS-style names listed in the certificate's Subject Alternative Name
+   *  extension, in order. Non-IP SANs are the only values TLS clients can
+   *  use as a server-name override, so the first one is the natural default
+   *  for `deltix configure` when the server is reached by bare IP. */
+  dnsNames: string[];
 }
 
 export class CertificateFetchError extends Error {
@@ -68,6 +73,13 @@ export function fetchServerCertificate(
             reject(new CertificateFetchError(host, port, 'server presented no certificate'));
             return;
           }
+          const altNames = (cert.subjectaltname ?? '')
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean);
+          const dnsNames = altNames
+            .filter((entry) => entry.startsWith('DNS:'))
+            .map((entry) => entry.slice('DNS:'.length));
           resolve({
             pem: derToPem(cert.raw),
             fingerprint256: cert.fingerprint256 ?? '',
@@ -80,6 +92,7 @@ export function fetchServerCertificate(
                 ? cert.issuer.CN
                 : JSON.stringify(cert.issuer ?? {}),
             validTo: cert.valid_to ?? '',
+            dnsNames,
           });
         } catch (err) {
           reject(new CertificateFetchError(host, port, err));

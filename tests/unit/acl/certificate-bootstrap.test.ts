@@ -45,6 +45,8 @@ describe('acl/certificate-bootstrap (integration, real self-signed TLS server)',
         '-nodes',
         '-subj',
         '/CN=localhost',
+        '-addext',
+        'subjectAltName=DNS:localhost,DNS:host-a.internal,IP:10.1.10.129',
       ],
       { stdio: 'pipe' },
     );
@@ -80,6 +82,11 @@ describe('acl/certificate-bootstrap (integration, real self-signed TLS server)',
     expect(result.pem).toContain('-----END CERTIFICATE-----');
     expect(result.fingerprint256).toMatch(/^([0-9A-F]{2}:){31}[0-9A-F]{2}$/);
     expect(result.subject).toBe('localhost');
+    // DNS-style SANs are surfaced so `deltix configure` can suggest the right
+    // server-name override; IP SANs are not DNS names and must not appear.
+    expect(result.dnsNames).toContain('localhost');
+    expect(result.dnsNames).toContain('host-a.internal');
+    expect(result.dnsNames).not.toContain('10.1.10.129');
   });
 
   it('rejects with CertificateFetchError when nothing is listening on the port', async () => {

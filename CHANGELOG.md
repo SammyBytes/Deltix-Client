@@ -9,6 +9,42 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.4.2] - 2026-08-28
+
+**In plain terms:** connecting a client to a server that is only reachable by
+its IP address (no hostname) used to trip over the TLS certificate check: the
+client setup asked for a "server name override" but gave no clue what to type,
+and if you put the IP address itself the transfer failed at the handshake. Now
+`deltix configure` reads the name the server's own certificate is issued for,
+suggests it automatically, and just needs you to press Enter — no guessing,
+and it works against any company's server out of the box.
+
+### Changed
+
+- **`deltix configure` now suggests the server-name override automatically.**
+  When the gRPC host is a bare IP, the certificate is fetched first (when the
+  server uses a self-signed cert) and the DNS-style names present in its
+  Subject Alternative Name are used as the default override for the TLS
+  server-name prompt — instead of a hard-coded `localhost` default that almost
+  never matched. IP-address SANs are correctly excluded (TLS clients cannot
+  verify an IP as a server name), and the fetched certificate's SAN is surfaced
+  to the operator. If the certificate has no usable DNS name, the prompt still
+  falls back to `localhost` so the flow never blocks.
+
+### Added
+
+- `acl/certificate-bootstrap.ts` now exposes the certificate's DNS-style
+  Subject Alternative Names via `FetchedCertificate.dnsNames`, parsed from the
+  raw TLS peer certificate, so `configure` can derive the correct override
+  instead of requiring the operator to know it in advance.
+
+### Tests
+
+- Extended `tests/unit/acl/certificate-bootstrap.test.ts`: asserts `dnsNames`
+  surfaces the real `DNS:` SAN entries and excludes IP-only SANs (so an IP
+  server with an auto-named `DNS:` SAN resolves to the right default). Full
+  unit suite and lint remain green.
+
 ## [0.4.1] - 2026-08-28
 
 **In plain terms:** running `deltix configure` on Windows used to crash with
