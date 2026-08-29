@@ -7,11 +7,20 @@ import {
   CommitDataDirNotFoundError,
   CommitEmptyError,
   CommitError,
+  PushEmptyError,
+  PushError,
+  PushNoUpstreamError,
 } from './versioning-local.errors';
 
 export interface LocalCommitResult {
   commitHash: string;
   repo: string;
+}
+
+export interface LocalCommitWithData {
+  message: string;
+  author: string;
+  tables: { name: string; data: string }[];
 }
 
 export interface VersioningLocalDeps {
@@ -100,4 +109,149 @@ export class VersioningLocalService {
 
     return { commitHash, repo: id.repo };
   }
+
+  /**
+   * Returns a list of commits on the current branch that are not present on
+   * origin/main, each carrying the table data at that commit's state.
+   *
+   * This is the core data-collection step for `deltix push`.
+   */
+  async getUnpushedCommits(id: LocalServerIdentity): Promise<LocalCommitWithData[]> {
+    const dataDir = computeLocalDataDir(this.deps.homeDir, id);
+    if (!existsSync(dataDir)) {
+      throw new CommitDataDirNotFoundError(id.repo);
+    }
+
+    const binaryPath = await this.deps.binaryManager.ensureInstalled();
+
+    // Verify origin/main exists as a reference
+    const refResult = await runDoltCommand(
+      binaryPath,
+      ['--data-dir', dataDir, 'sql', '-q', "SELECT 1 FROM dolt_branches WHERE name = 'main'"],
+      { timeoutMs: 10_000 },
+    );
+    if (refResult.exitCode !== 0) {
+      throw new PushError('sql', refResult.stderr);
+    }
+
+    // List unpushed commits (oldest first) as hash|message|author
+    const logResult = await runDoltCommand(
+      binaryPath,
+      ['--data-dir', dataDir, 'log', '--reverse', '--format=%H|%s|%an', 'origin/main..main'],
+      { timeoutMs: 10_000 },
+    );
+    if (logResult.exitCode !== 0) {
+      const output = (logResult.stdout + logResult.stderr).trim();
+      if (output.includes('unknown ref') || output.includes('does not exist')) {
+        throw new PushNoUpstreamError(id.repo);
+      }
+      throw new PushError('log', logResult.stderr.trim() || logResult.stdout.trim());
+    }
+
+    const rawLines = logResult.stdout.trim().split('\n').filter(Boolean);
+    if (rawLines.length === 0) {
+      throw new PushEmptyError(id.repo);
+    }
+
+    const commits: LocalCommitWithData[] = [];
+    for (const line of rawLines) {
+      const [hash, message, author] = parseLogLine(line);
+      if (!hash) {
+        continue;
+      }
+
+      const tables = await this.getChangedTables(binaryPath, dataDir, hash);
+      const tableData: { name: string; data: string }[] = [];
+      for (const table of tables) {
+        const data = await this.exportTableAtCommit(binaryPath, dataDir, table, hash);
+        tableData.push({ name: table, data });
+      }
+
+      commits.push({ message, author, tables: tableData });
+    }
+
+    return commits;
+  }
+
+  private async getChangedTables(
+    binaryPath: string,
+    dataDir: string,
+    commitHash: string,
+  ): Promise<string[]> {
+    const diffResult = await runDoltCommand(
+      binaryPath,
+      ['--data-dir', dataDir, 'diff', '--name-only', `${commitHash}^..${commitHash}`],
+      { timeoutMs: 10_000 },
+    );
+    if (diffResult.exitCode !== 0) {
+      // First commit has no parent; fall back to all tables at that commit.
+      const tablesResult = await runDoltCommand(
+        binaryPath,
+        [
+          '--data-dir',
+          dataDir,
+          'sql',
+          '-q',
+          `SELECT table_name FROM dolt_diff WHERE to_commit = '${commitHash}'`,
+          '-r',
+          'csv',
+        ],
+        { timeoutMs: 10_000 },
+      );
+      if (tablesResult.exitCode !== 0) {
+        throw new PushError('diff', tablesResult.stderr);
+      }
+      const lines = tablesResult.stdout.trim().split('\n').filter(Boolean);
+      return lines.slice(1); // skip header
+    }
+
+    return diffResult.stdout
+      .trim()
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+  }
+
+  private async exportTableAtCommit(
+    binaryPath: string,
+    dataDir: string,
+    table: string,
+    commitHash: string,
+  ): Promise<string> {
+    const result = await runDoltCommand(
+      binaryPath,
+      [
+        '--data-dir',
+        dataDir,
+        'sql',
+        '-q',
+        `SELECT * FROM ${table} AS OF '${commitHash}'`,
+        '-r',
+        'csv',
+      ],
+      { timeoutMs: 30_000 },
+    );
+    if (result.exitCode !== 0) {
+      throw new PushError('sql export', result.stderr);
+    }
+    return result.stdout;
+  }
+}
+
+/**
+ * Parse a `dolt log --format=%H|%s|%an` line. The message may contain pipes,
+ * so we split only on the first two pipes.
+ */
+function parseLogLine(line: string): [string, string, string] {
+  const firstPipe = line.indexOf('|');
+  if (firstPipe === -1) {
+    return [line, '', ''];
+  }
+  const hash = line.slice(0, firstPipe);
+  const rest = line.slice(firstPipe + 1);
+  const secondPipe = rest.indexOf('|');
+  if (secondPipe === -1) {
+    return [hash, rest, ''];
+  }
+  return [hash, rest.slice(0, secondPipe), rest.slice(secondPipe + 1)];
 }

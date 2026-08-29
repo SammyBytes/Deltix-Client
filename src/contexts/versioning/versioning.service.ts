@@ -1,8 +1,10 @@
 import type {
   BranchSummary,
   DiffResult,
+  ImportedCommit,
   LogCommitEntry,
   MergeResult,
+  PushCommitsResult,
   RepoRoleAssignment,
   RepoSummary,
   RepoSyncPreferenceSummary,
@@ -141,6 +143,14 @@ export class VersioningService {
       repoId,
       mode,
       tables,
+    );
+  }
+
+  async pushCommits(repoId: string, commits: ImportedCommit[]): Promise<PushCommitsResult> {
+    return this.versioningApi.pushCommits(
+      await this.sessionService.mintAccessToken(),
+      repoId,
+      commits,
     );
   }
 }

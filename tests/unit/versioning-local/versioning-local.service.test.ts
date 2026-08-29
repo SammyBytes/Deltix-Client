@@ -6,6 +6,8 @@ import type { BinaryManager } from '../../../src/contexts/binary-manager';
 import {
   CommitDataDirNotFoundError,
   CommitError,
+  PushEmptyError,
+  PushNoUpstreamError,
   VersioningLocalService,
 } from '../../../src/contexts/versioning-local';
 
@@ -24,6 +26,13 @@ describe('versioning-local/versioning-local.service (unit)', () => {
     const service = new VersioningLocalService(makeDeps('/nonexistent'));
     await expect(
       service.commit({ repo: 'ghost', projectRoot: '/work/ghost' }, 'msg'),
+    ).rejects.toBeInstanceOf(CommitDataDirNotFoundError);
+  });
+
+  it('getUnpushedCommits() throws CommitDataDirNotFoundError when data dir does not exist', async () => {
+    const service = new VersioningLocalService(makeDeps('/nonexistent'));
+    await expect(
+      service.getUnpushedCommits({ repo: 'ghost', projectRoot: '/work/ghost' }),
     ).rejects.toBeInstanceOf(CommitDataDirNotFoundError);
   });
 });

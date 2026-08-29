@@ -76,6 +76,7 @@ function fakeAdapter(overrides: Partial<VersioningApiAdapter> = {}): VersioningA
       requestedTables: ['orders'],
       autoIncludedTables: ['customers'],
     })),
+    pushCommits: mock(async () => ({ commitHash: 'abc123' })),
     ...overrides,
   } as VersioningApiAdapter;
 }
@@ -134,6 +135,25 @@ describe('versioning/versioning.service (unit, fake adapter)', () => {
     await expect(
       service.dryRunSyncPreferences('demo', 'schema_and_data', ['orders']),
     ).resolves.toMatchObject({ mode: 'schema_and_data' });
+  });
+
+  it('pushes commits to the server', async () => {
+    const sessionService = fakeSessionService();
+    const adapter = fakeAdapter();
+    const service = new VersioningService(sessionService, adapter);
+
+    const commits = [
+      {
+        message: 'feat: add orders',
+        author: 'alice',
+        tables: [{ name: 'orders', data: 'id,name\n1,order1' }],
+      },
+    ];
+    const result = await service.pushCommits('demo', commits);
+
+    expect(result.commitHash).toBe('abc123');
+    expect(sessionService.mintAccessToken).toHaveBeenCalledTimes(1);
+    expect(adapter.pushCommits).toHaveBeenCalledWith('access-token', 'demo', commits);
   });
 
   it('propagates session/authentication failures', async () => {
