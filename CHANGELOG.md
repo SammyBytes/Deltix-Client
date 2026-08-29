@@ -9,19 +9,38 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
-## [Unreleased]
+## [0.5.0] - 2026-08-29
 
-**In plain terms:** the CLI now manages its own local copy of the Dolt
-database-engine binary, downloading and verifying it automatically into your
-home folder the first time it's needed. This is the foundation for running a
-local Deltix repo (`deltix start`) and, later in the same roadmap, committing
-and pushing your data straight from your machine.
+**In plain terms:** the CLI became a complete local workflow, the same shape
+you know from Git. It now manages its own copy of the Dolt database engine
+(downloaded and verified automatically), runs a local database server with
+`deltix start`, and — new in this release — you can **bind a folder to a
+repository** (`deltix init`), **save snapshots of your data**
+(`deltix commit`), and **send those snapshots to the company server**
+(`deltix push`), all from inside your project folder. Pushing now sends real
+commits with exactly the tables you chose — no more uploading loose files. If
+you don't have permission to create a repository, the push is politely
+refused and your work stays safely on your machine.
 
 ### Added
 
-- **`binary-manager` context.** First known-good step of the
-  `mysql-embedded` roadmap. `BinaryManager#ensureInstalled()` resolves a Dolt
-  binary following, in order: `DELTIX_DOLT_BIN_PATH`, a matching `dolt` on
+- **`deltix push` — commit-based sync over REST (Fase 4b).** Resolves the
+  project from the current folder (no file argument), reads the commits on
+  `main` that aren't on `origin/main`, exports each commit's changed table data
+  via Dolt temporal queries (`SELECT * FROM <table> AS OF <hash>` — no
+  checkout needed), and posts them to the server's
+  `POST /repos/:repoId/push-commits` endpoint. "Already up to date" is a
+  success, not an error. **Pull is unchanged**: it still streams over gRPC.
+- **`deltix commit <message> [tables...]` (Fase 3b).** Stages and commits the
+  local Dolt working tree — either named tables (allow-list) or everything —
+  and prints the new commit hash.
+- **`deltix init <repo>` + `.deltix/config.toml` (Fase 3a).** Binds a working
+  directory to a Deltix repo, like `.git` does. `start` / `stop` / `status` /
+  `commit` / `push` resolve the repo from the current folder, and local state
+  is keyed per checkout (SHA-256 of the project root), so two clones of the
+  same repo never collide.
+- **`binary-manager` context.** `BinaryManager#ensureInstalled()` resolves a
+  Dolt binary following, in order: `DELTIX_DOLT_BIN_PATH`, a matching `dolt` on
   `PATH`, an already-installed copy under `~/.deltix/bin/dolt-<version>` that
   passes its recorded SHA-256, or a fresh download of the official release
   tarball over HTTPS (extracted with `tar`, then hash-recorded for future
@@ -33,16 +52,6 @@ and pushing your data straight from your machine.
   `runDoltOrThrow`, `whichBinary`, and `DoltExecError`.
 - **Dolt version pinning.** `DELTIX_DOLT_VERSION` (default `2.3.1`, matching
   Deltix-Server) and `DELTIX_HOME` env vars; new `src/shared/env.ts` fields.
-
-### Security
-
-- Only an **unmodified official Dolt release artifact** is ever used — never
-  compiled, patched, or altered locally — and its on-disk SHA-256 is
-  re-verified before every run, so a tampered or corrupted binary is refused
-  and reinstalled instead of trusted.
-
-### Added
-
 - **`mysql-embedded` context + `deltix start` / `stop` / `status`.** Managed
   lifecycle of a local **Dolt SQL server** (`dolt sql-server`) bound to
   loopback — one process per local repo checkout — giving you a real,
@@ -61,6 +70,26 @@ and pushing your data straight from your machine.
 - **CI Dolt install step**: the GitHub Actions workflow now installs the pinned
   Dolt binary so the `mysql-embedded` integration suite runs a real spawn →
   status → stop lifecycle in CI (skipped locally when no Dolt is present).
+
+### Security
+
+- Only an **unmodified official Dolt release artifact** is ever used — never
+  compiled, patched, or altered locally — and its on-disk SHA-256 is
+  re-verified before every run, so a tampered or corrupted binary is refused
+  and reinstalled instead of trusted.
+- **Push is scoped to the project (Fase 4b).** `deltix push` only operates
+  inside a folder initialized with `deltix init` (the `.deltix/config.toml`
+  binding), and the server independently enforces that the authenticated user
+  holds `writer`/`admin` on that exact repo — there is no global or
+  cross-repo push path.
+
+### Tests
+
+- 107 unit tests pass; build + lint clean. New: `getUnpushedCommits()`
+  data-dir guard, `pushCommits()` token-minting and delegation, per-project
+  state isolation, commit allow-list staging, and TOML config round-trips.
+  End-to-end commit flow verified locally against real Dolt 2.3.x
+  (init → start → commit → inspect `dolt_log`).
 
 ## [0.4.3] - 2026-08-29
 
