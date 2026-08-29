@@ -57,4 +57,18 @@ describe('versioning-local/versioning-local.service (unit)', () => {
       service.applyCommits({ repo: 'ghost', projectRoot: '/work/ghost' }, 'main', []),
     ).rejects.toBeInstanceOf(CommitDataDirNotFoundError);
   });
+
+  it('mergeFromRemote() throws CommitDataDirNotFoundError when data dir does not exist', async () => {
+    const service = new VersioningLocalService(makeDeps('/nonexistent'));
+    await expect(
+      service.mergeFromRemote({ repo: 'ghost', projectRoot: '/work/ghost' }),
+    ).rejects.toBeInstanceOf(CommitDataDirNotFoundError);
+  });
+
+  it('mergeAbort() throws CommitDataDirNotFoundError when data dir does not exist', async () => {
+    const service = new VersioningLocalService(makeDeps('/nonexistent'));
+    await expect(
+      service.mergeAbort({ repo: 'ghost', projectRoot: '/work/ghost' }),
+    ).rejects.toBeInstanceOf(CommitDataDirNotFoundError);
+  });
 });
