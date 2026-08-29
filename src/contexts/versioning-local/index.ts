@@ -6,4 +6,5 @@ export {
   PushEmptyError,
   PushError,
 } from './versioning-local.errors';
+export type { LocalCommitTable, LocalCommitWithData } from './versioning-local.service';
 export { VersioningLocalService } from './versioning-local.service';

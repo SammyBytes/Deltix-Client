@@ -80,6 +80,9 @@ export interface SyncPreferenceDryRunPlan {
 
 export interface ImportedTable {
   name: string;
+  /** CREATE TABLE DDL, so the receiving side recreates the table (and its
+   * primary key) faithfully — a bare CSV cannot carry schema. */
+  schema: string;
   data: string;
 }
 
@@ -91,6 +94,18 @@ export interface ImportedCommit {
 
 export interface PushCommitsResult {
   commitHash: string;
+}
+
+export interface RepoRef {
+  branch: string;
+  hash: string;
+}
+
+export interface PullCommitsResult {
+  /** Server head of the requested branch (from the X-Deltix-Server-Head header). */
+  serverHead: string | null;
+  /** Commits the client is missing, oldest-first. */
+  commits: ImportedCommit[];
 }
 
 export type MergeResult =
@@ -403,6 +418,43 @@ export class VersioningApiAdapter {
       throw new VersioningRequestError(await this.readError(res), res.status);
     }
     return (await res.json()) as PushCommitsResult;
+  }
+
+  async fetchRefs(accessToken: string, repoId: string): Promise<RepoRef[]> {
+    const res = await this.request(
+      `/api/v1/versioning/repos/${encodeURIComponent(repoId)}/refs`,
+      accessToken,
+      { method: 'GET' },
+    );
+    if (res.status === 404) throw new RepoNotFoundError(await this.readError(res));
+    await this.throwIfCommonErrors(res);
+    return ((await res.json()) as { refs: RepoRef[] }).refs;
+  }
+
+  async pullCommits(
+    accessToken: string,
+    repoId: string,
+    branch: string,
+    fromHash: string | null,
+  ): Promise<PullCommitsResult> {
+    const params = new URLSearchParams({ branch });
+    if (fromHash) {
+      params.set('from', fromHash);
+    }
+    const res = await this.request(
+      `/api/v1/versioning/repos/${encodeURIComponent(repoId)}/pull-commits?${params.toString()}`,
+      accessToken,
+      { method: 'GET' },
+    );
+    if (res.status === 404) throw new RepoNotFoundError(await this.readError(res));
+    await this.throwIfCommonErrors(res);
+    const serverHead = res.headers.get('x-deltix-server-head');
+    const text = await res.text();
+    const commits = text
+      .split('\n')
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line) as ImportedCommit);
+    return { serverHead: serverHead && serverHead.length > 0 ? serverHead : null, commits };
   }
 
   private async throwIfCommonErrors(res: Response): Promise<void> {

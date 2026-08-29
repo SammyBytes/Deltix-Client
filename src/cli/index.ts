@@ -16,12 +16,6 @@ import { join } from 'node:path';
 import { CertificateFetchError, fetchServerCertificate } from '../acl/certificate-bootstrap';
 import { ConfigStore, defaultConfigPath } from '../contexts/config';
 import {
-  createDataflowService,
-  LocalFileNotFoundError,
-  TicketAuthenticationError,
-  TransferAbortedError,
-} from '../contexts/dataflow';
-import {
   createLocalProjectService,
   InvalidRepoNameError,
   NoProjectError,
@@ -128,11 +122,7 @@ async function runPush(args: string[]): Promise<number> {
   }
 
   try {
-    const { BinaryManager } = await import('../contexts/binary-manager');
-    const localService = new VersioningLocalService({
-      homeDir: process.env.DELTIX_HOME ?? join(homedir(), '.deltix'),
-      binaryManager: new BinaryManager(),
-    });
+    const localService = await newLocalService();
 
     const branch = 'main';
     const commits = await localService.getUnpushedCommits(identity, branch);
@@ -187,22 +177,110 @@ async function runPush(args: string[]): Promise<number> {
   }
 }
 
-async function runPull(args: string[]): Promise<number> {
-  const [repo, destinationFilePath] = args;
-  if (!repo || !destinationFilePath) {
-    printError('Usage: deltix pull <repo> <destination-file-path>');
+async function newLocalService(): Promise<VersioningLocalService> {
+  const { BinaryManager } = await import('../contexts/binary-manager');
+  return new VersioningLocalService({
+    homeDir: process.env.DELTIX_HOME ?? join(homedir(), '.deltix'),
+    binaryManager: new BinaryManager(),
+  });
+}
+
+function handleSyncError(err: unknown, action: string): number {
+  if (
+    err instanceof NoProjectError ||
+    err instanceof CommitDataDirNotFoundError ||
+    err instanceof LocalRepoInitError ||
+    err instanceof PushError ||
+    err instanceof InsufficientRoleError ||
+    err instanceof RepoNotFoundError ||
+    err instanceof ValidationError
+  ) {
+    printError(String(err.message));
     return 1;
   }
+  if (err instanceof VersioningAuthenticationError || err instanceof NoActiveSessionError) {
+    printError('Authentication failed. Run `deltix login` first.');
+    return 1;
+  }
+  printError(`${action}: ${String(err)}`);
+  return 1;
+}
 
+async function runPull(args: string[]): Promise<number> {
+  const [repoArg] = args;
+  const identity = await resolveServerIdentity(repoArg);
+  if (!identity) {
+    return 1;
+  }
+  const branch = 'main';
   try {
-    const result = await createDataflowService().pull(repo, destinationFilePath);
-    printSuccess(`Pull completed for ${repo}`, {
-      bytesReceived: result.bytesReceived,
-      checksum: result.checksum,
-    });
+    const local = await newLocalService();
+    const from = await local.getRemoteHead(identity, branch);
+    const localHead = await local.getBranchHead(identity, branch);
+
+    // Fast-forward only: refuse when the local branch has commits the server
+    // doesn't (divergent merge is a later phase).
+    if (from && localHead && localHead !== from) {
+      printError(
+        `Local "${identity.repo}" has commits not on the server. Run \`deltix push\` first (divergent merge is not yet supported).`,
+      );
+      return 1;
+    }
+
+    const { commits, serverHead } = await createVersioningService().pullCommits(
+      identity.repo,
+      branch,
+      from,
+    );
+    if (commits.length === 0) {
+      if (serverHead) {
+        await local.advanceRemoteRef(identity, branch, serverHead);
+      }
+      printInfo(`Already up to date for ${identity.repo}`);
+      return 0;
+    }
+    const head = await local.applyCommits(identity, branch, commits);
+    await local.advanceRemoteRef(identity, branch, head);
+    printSuccess(`Pulled ${commits.length} commit(s) into ${identity.repo}`, { head });
     return 0;
   } catch (err) {
-    return handleDataflowError(err, 'Pull failed');
+    return handleSyncError(err, 'Pull failed');
+  }
+}
+
+async function runFetch(args: string[]): Promise<number> {
+  const [repoArg] = args;
+  const identity = await resolveServerIdentity(repoArg);
+  if (!identity) {
+    return 1;
+  }
+  const branch = 'main';
+  try {
+    const local = await newLocalService();
+    const from = await local.getRemoteHead(identity, branch);
+    if (!from) {
+      printInfo(`No remote-tracking ref for ${identity.repo} yet — run \`deltix pull\` first.`);
+      return 0;
+    }
+    const { commits, serverHead } = await createVersioningService().pullCommits(
+      identity.repo,
+      branch,
+      from,
+    );
+    if (commits.length === 0) {
+      if (serverHead && serverHead !== from) {
+        await local.advanceRemoteRef(identity, branch, serverHead);
+      }
+      printInfo(`No new commits for ${identity.repo}`);
+      return 0;
+    }
+    // Materialize onto origin/<branch>; leave the working branch untouched.
+    await local.applyCommits(identity, `origin/${branch}`, commits);
+    await local.checkout(identity, branch);
+    printSuccess(`Fetched ${commits.length} commit(s) into origin/${branch} of ${identity.repo}`);
+    return 0;
+  } catch (err) {
+    return handleSyncError(err, 'Fetch failed');
   }
 }
 
@@ -559,23 +637,6 @@ function handleVersioningError(err: unknown, action: string): number {
     err instanceof UserNotFoundError ||
     err instanceof ValidationError
   ) {
-    printError(`${action}: ${err.message}`);
-    return 1;
-  }
-  printError(`${action}: ${String(err)}`);
-  return 1;
-}
-
-function handleDataflowError(err: unknown, action: string): number {
-  if (err instanceof NoActiveSessionError || err instanceof TicketAuthenticationError) {
-    printError('Not logged in. Run `deltix login` first.');
-    return 1;
-  }
-  if (err instanceof LocalFileNotFoundError) {
-    printError(`${action}: ${err.message}`);
-    return 1;
-  }
-  if (err instanceof TransferAbortedError) {
     printError(`${action}: ${err.message}`);
     return 1;
   }
@@ -967,6 +1028,8 @@ export async function runCli(argv: string[]): Promise<number> {
       return runPush(rest);
     case 'pull':
       return runPull(rest);
+    case 'fetch':
+      return runFetch(rest);
     case 'repo':
       return runRepo(rest);
     case 'branch':
@@ -984,12 +1047,13 @@ export async function runCli(argv: string[]): Promise<number> {
     default:
       printLines([
         'Deltix-Client versioning parity with Deltix-Server Fase 5',
-        'Usage: deltix <version|configure|init|commit|login|logout|whoami|push|pull|repo|branch|merge|log|diff|roles|sync-prefs|start|stop|status> [...args]',
+        'Usage: deltix <version|configure|init|commit|login|logout|whoami|push|pull|fetch|repo|branch|merge|log|diff|roles|sync-prefs|start|stop|status> [...args]',
         '  deltix configure',
         '  deltix init <repo>',
         '  deltix commit <message> [tables...]',
         '  deltix push [<repo>]',
-        '  deltix pull <repo> <destination-file-path>',
+        '  deltix pull [<repo>]',
+        '  deltix fetch [<repo>]',
         '  deltix start [<repo>]',
         '  deltix stop [<repo>]',
         '  deltix status [<repo>]',
