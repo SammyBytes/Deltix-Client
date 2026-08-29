@@ -56,9 +56,9 @@ import {
   CommitDataDirNotFoundError,
   CommitEmptyError,
   CommitError,
+  LocalRepoInitError,
   PushEmptyError,
   PushError,
-  PushNoUpstreamError,
   VersioningLocalService,
 } from '../contexts/versioning-local';
 import { getClientBuildInfo } from '../shared/build-info';
@@ -134,8 +134,15 @@ async function runPush(args: string[]): Promise<number> {
       binaryManager: new BinaryManager(),
     });
 
-    const commits = await localService.getUnpushedCommits(identity);
+    const branch = 'main';
+    const commits = await localService.getUnpushedCommits(identity, branch);
     const result = await createVersioningService().pushCommits(identity.repo, commits);
+
+    // Advance the remote-tracking ref so the next push only sends new work.
+    const head = await localService.getBranchHead(identity, branch);
+    if (head) {
+      await localService.advanceRemoteRef(identity, branch, head);
+    }
 
     printSuccess(`Pushed ${commits.length} commit(s) to ${identity.repo}`, {
       commitHash: result.commitHash,
@@ -151,7 +158,7 @@ async function runPush(args: string[]): Promise<number> {
       printError(String(err.message));
       return 1;
     }
-    if (err instanceof PushNoUpstreamError) {
+    if (err instanceof LocalRepoInitError) {
       printError(String(err.message));
       return 1;
     }
@@ -769,6 +776,13 @@ async function runInit(args: string[]): Promise<number> {
   }
   try {
     const project = await createLocalProjectService().init(process.cwd(), repo);
+    // Create the local Dolt repo now (the "git init" moment), so the folder is
+    // a working versioned checkout before `deltix start` ever runs.
+    const { BinaryManager } = await import('../contexts/binary-manager');
+    await new VersioningLocalService({
+      homeDir: process.env.DELTIX_HOME ?? join(homedir(), '.deltix'),
+      binaryManager: new BinaryManager(),
+    }).initLocalRepo({ repo: project.config.repo, projectRoot: project.root });
     printSuccess(`Initialized Deltix project in ${project.root}`, {
       repo,
       config: project.configPath,

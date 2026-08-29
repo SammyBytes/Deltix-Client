@@ -2,8 +2,8 @@ export {
   CommitDataDirNotFoundError,
   CommitEmptyError,
   CommitError,
+  LocalRepoInitError,
   PushEmptyError,
   PushError,
-  PushNoUpstreamError,
 } from './versioning-local.errors';
 export { VersioningLocalService } from './versioning-local.service';

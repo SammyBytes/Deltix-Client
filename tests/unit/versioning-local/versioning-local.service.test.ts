@@ -1,13 +1,7 @@
 import { describe, expect, it } from 'bun:test';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import type { BinaryManager } from '../../../src/contexts/binary-manager';
 import {
   CommitDataDirNotFoundError,
-  CommitError,
-  PushEmptyError,
-  PushNoUpstreamError,
   VersioningLocalService,
 } from '../../../src/contexts/versioning-local';
 
@@ -33,6 +27,20 @@ describe('versioning-local/versioning-local.service (unit)', () => {
     const service = new VersioningLocalService(makeDeps('/nonexistent'));
     await expect(
       service.getUnpushedCommits({ repo: 'ghost', projectRoot: '/work/ghost' }),
+    ).rejects.toBeInstanceOf(CommitDataDirNotFoundError);
+  });
+
+  it('getBranchHead() throws CommitDataDirNotFoundError when data dir does not exist', async () => {
+    const service = new VersioningLocalService(makeDeps('/nonexistent'));
+    await expect(
+      service.getBranchHead({ repo: 'ghost', projectRoot: '/work/ghost' }),
+    ).rejects.toBeInstanceOf(CommitDataDirNotFoundError);
+  });
+
+  it('advanceRemoteRef() throws CommitDataDirNotFoundError when data dir does not exist', async () => {
+    const service = new VersioningLocalService(makeDeps('/nonexistent'));
+    await expect(
+      service.advanceRemoteRef({ repo: 'ghost', projectRoot: '/work/ghost' }, 'main', 'abc123'),
     ).rejects.toBeInstanceOf(CommitDataDirNotFoundError);
   });
 });
