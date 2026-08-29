@@ -9,6 +9,63 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.6.0] - 2026-08-29
+
+**In plain terms:** the CLI now completes the Git loop on your side. You can
+**clone** a repository onto your machine, **pull** the server's latest changes
+(merging them with anything you did locally, and telling you clearly if there's
+a conflict to resolve), **fetch** to just update what you know about the server
+without changing your work, and see your **local vs remote branches** like in
+Git. Under the hood, `deltix push` was fixed so it actually works on a fresh
+folder (it now creates the local database engine and remembers what you've
+already sent). The old way of pulling a single file is kept only behind an
+opt-in switch for now, so it can be retired safely.
+
+### Added
+
+- **`deltix pull [<repo>]` — native commit-based pull (Fase 5.9).** Downloads
+  the commits the server has that you don't and applies them to your local
+  branch, recreating tables from their schema so primary keys survive.
+  Fast-forwards when you have nothing to send; when you and the server have
+  diverged it runs a real `dolt merge`. On conflicts it prints a per-table
+  report and leaves the repo mid-merge; `deltix pull --abort` undoes it.
+- **`deltix fetch [<repo>]` (Fase 5.9).** Updates your `origin/<branch>`
+  remote-tracking refs from the server without touching your working branch —
+  exactly like `git fetch`. Backed by the server's new streaming `pull-commits`
+  endpoint (NDJSON).
+- **`deltix clone <repo>` (Fase 5.9).** Creates `./<repo>`, binds it, and pulls
+  the full server history in one step — the `git clone` equivalent.
+- **`deltix branch local [<repo>]` (Fase 5.9).** Lists Local vs
+  Remote-tracking (`origin/*`) branches, like `git branch -a`.
+- **`DELTIX_ENABLE_GRPC_TRANSFER` feature flag (Fase 5.9, transitional).** When
+  on **and** a destination file is passed, `deltix pull <repo> <file>` falls
+  back to the legacy whole-file gRPC transfer. Off by default; kept only until
+  the native pull is confirmed, then removed.
+
+### Fixed
+
+- **`deltix push` was non-functional on a fresh checkout (Fase 5.9).** Three
+  latent bugs, none caught because the commit-push path had no end-to-end test:
+  the client never ran `dolt init` (so the local repo/branch didn't exist),
+  `dolt log` has no `--reverse`/`--format` flags (the old range query always
+  failed), and `origin/main` was never created or advanced. Now `deltix init`
+  creates the local Dolt repo, unpushed commits are enumerated via the
+  `dolt_log` table, and `origin/<branch>` is advanced after each push so a
+  second push only sends new work.
+
+### Changed
+
+- **`deltix pull` no longer takes a file path** (breaking, by design): it is now
+  commit-based by default. The legacy file behavior is available only behind
+  `DELTIX_ENABLE_GRPC_TRANSFER`.
+
+### Tests
+
+- 113 unit tests pass. New: `origin/*` tracking + full-history push (real-Dolt
+  validated), fast-forward and divergent merge (conflict + abort), local/remote
+  branch listing; plus a real-server round-trip integration test
+  (clone → push → pull → conflict) that runs in CI where both repos are present.
+
 ## [0.5.0] - 2026-08-29
 
 **In plain terms:** the CLI became a complete local workflow, the same shape
