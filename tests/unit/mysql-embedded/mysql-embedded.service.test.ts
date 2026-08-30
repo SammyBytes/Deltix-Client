@@ -7,6 +7,7 @@ import type { BackgroundProcess } from '../../../src/acl/dolt-exec';
 import type { BinaryManager } from '../../../src/contexts/binary-manager';
 import {
   LocalServerNotRunningError,
+  LocalServerPortInUseError,
   LocalServerStartError,
   type MysqlEmbeddedDeps,
   MysqlEmbeddedService,
@@ -52,6 +53,7 @@ function makeService(
       waitForCalls.push(1);
       return overrides.ready ?? true;
     },
+    probePort: async () => false,
     ...overrides,
   });
   return { service, spawnCalls };
@@ -182,6 +184,24 @@ describe('mysql-embedded/mysql-embedded.service (unit, mocks)', () => {
     const stateFiles = await readdir(join(home, 'run'));
     expect(stateFiles.filter((f) => f.startsWith('project-')).length).toBe(2);
 
+    await rm(home, { recursive: true, force: true });
+  });
+
+  it('start() fails fast when the port is already held by another server', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'deltix-me-portbusy-'));
+    const { service, spawnCalls } = makeService({ homeDir: home, probePort: async () => true });
+    await expect(service.start({ repo: 'demo' })).rejects.toBeInstanceOf(LocalServerPortInUseError);
+    // Critically: it must NOT spawn a doomed Dolt or write a stale run-state.
+    expect(spawnCalls.length).toBe(0);
+    await rm(home, { recursive: true, force: true });
+  });
+
+  it('start() data dir ends with the repo name (so Dolt names the db after it)', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'deltix-me-dbname-'));
+    const { service } = makeService({ homeDir: home });
+    const dir = service.dataDirFor({ repo: 'demo', projectRoot: '/work/demo' });
+    expect(dir.endsWith('demo')).toBe(true);
+    expect(dir).toContain(join('projects'));
     await rm(home, { recursive: true, force: true });
   });
 });
