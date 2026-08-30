@@ -15,7 +15,22 @@ MIT licensed. See [`LICENSE`](./LICENSE).
 
 ## Install
 
-Grab the binary for your platform from the
+Fastest path — a single command that downloads the right binary for your
+OS/arch, verifies its SHA-256, and installs to `~/.local/bin` (Linux/macOS,
+including Arch):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/SammyBytes/Deltix-Client/main/scripts/get-deltix-client.sh | bash
+```
+
+Windows (Scoop, no moderation):
+
+```powershell
+scoop bucket add deltix https://github.com/SammyBytes/deltix-bucket
+scoop install deltix
+```
+
+Or grab the binary for your platform directly from the
 [latest release](https://github.com/SammyBytes/Deltix-Client/releases/latest)
 (Linux/macOS/Windows, x64 and arm64), put it on your `PATH`, and you're done —
 no Bun runtime needed.
@@ -25,15 +40,12 @@ chmod +x deltix-linux-x64 && sudo mv deltix-linux-x64 /usr/local/bin/deltix
 deltix version
 ```
 
-For CI/automation, there's also a container image:
-
-```bash
-docker pull ghcr.io/sammybytes/deltix-client:latest
-```
-
 The first time a command needs Dolt, the client downloads and SHA-256-verifies
 a pinned official Dolt binary into `~/.deltix/bin/` — you never install a
 database server yourself.
+
+See [`packaging/README.md`](./packaging/README.md) for the distribution
+options (installer, Scoop, and the deferred winget/AUR/Homebrew routes).
 
 ---
 
