@@ -16,10 +16,19 @@ import { join } from 'node:path';
 import { CertificateFetchError, fetchServerCertificate } from '../acl/certificate-bootstrap';
 import { ConfigStore, defaultConfigPath } from '../contexts/config';
 import {
+  type BlobPolicy,
+  createImportService,
+  ImportBlobError,
+  ImportDsnError,
+  ImportError,
+  ImportUnsupportedSchemeError,
+} from '../contexts/import';
+import {
   createLocalProjectService,
   InvalidRepoNameError,
   NoProjectError,
   ProjectAlreadyInitializedError,
+  type ResolvedProject,
 } from '../contexts/local-project';
 import {
   createMysqlEmbeddedService,
@@ -355,6 +364,88 @@ async function runClone(args: string[]): Promise<number> {
     return 0;
   } catch (err) {
     return handleSyncError(err, 'Clone failed');
+  }
+}
+
+function flagValue(args: string[], name: string): string | undefined {
+  const eq = args.find((a) => a.startsWith(`--${name}=`));
+  if (eq) {
+    return eq.slice(name.length + 3);
+  }
+  const i = args.indexOf(`--${name}`);
+  return i >= 0 ? args[i + 1] : undefined;
+}
+
+function flagMulti(args: string[], name: string): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] ?? '';
+    if (a.startsWith(`--${name}=`)) {
+      out.push(a.slice(name.length + 3));
+    } else if (a === `--${name}` && args[i + 1]) {
+      out.push(args[i + 1] as string);
+    }
+  }
+  return out;
+}
+
+async function runImport(args: string[]): Promise<number> {
+  const repoArg = args.find((a) => !a.startsWith('--'));
+  const from = flagValue(args, 'from') ?? process.env.DELTIX_IMPORT_URL;
+  if (!repoArg || !from) {
+    printError(
+      'Usage: deltix import <repo> --from <mysql://dsn> [--table t] [--schema-only] [--no-commit] [--blobs error|base64|skip]',
+    );
+    return 1;
+  }
+  const blobsRaw = flagValue(args, 'blobs');
+  const blobs = (
+    blobsRaw === 'base64' || blobsRaw === 'skip' || blobsRaw === 'error' ? blobsRaw : 'error'
+  ) as BlobPolicy;
+  try {
+    // Bind the folder to the repo (the "git init" moment); reuse if already bound.
+    let project: ResolvedProject;
+    try {
+      project = await createLocalProjectService().init(process.cwd(), repoArg);
+    } catch (err) {
+      if (err instanceof ProjectAlreadyInitializedError) {
+        project = await createLocalProjectService().resolve(process.cwd());
+      } else {
+        throw err;
+      }
+    }
+    const identity = { repo: project.config.repo, projectRoot: project.root };
+    const result = await createImportService().import(identity, {
+      from,
+      tables: flagMulti(args, 'table'),
+      schemaOnly: args.includes('--schema-only'),
+      noCommit: args.includes('--no-commit'),
+      blobs,
+    });
+    printSuccess(`Imported ${result.tablesImported} table(s) from ${result.database}`, {
+      commit: result.commitHash ?? '(not committed — --no-commit)',
+    });
+    for (const s of result.skipped) {
+      printInfo(`skipped ${s.table}: ${s.reason}`);
+    }
+    printInfo('Next: deltix push');
+    return 0;
+  } catch (err) {
+    if (
+      err instanceof ImportDsnError ||
+      err instanceof ImportUnsupportedSchemeError ||
+      err instanceof ImportBlobError ||
+      err instanceof ImportError ||
+      err instanceof CommitDataDirNotFoundError ||
+      err instanceof LocalRepoInitError ||
+      err instanceof ProjectAlreadyInitializedError ||
+      err instanceof InvalidRepoNameError
+    ) {
+      printError(err.message);
+      return 1;
+    }
+    printError(`Import failed: ${String(err)}`);
+    return 1;
   }
 }
 
@@ -1119,6 +1210,8 @@ export async function runCli(argv: string[]): Promise<number> {
       return runInit(rest);
     case 'clone':
       return runClone(rest);
+    case 'import':
+      return runImport(rest);
     case 'commit':
       return runCommit(rest);
     case 'login':
@@ -1150,10 +1243,11 @@ export async function runCli(argv: string[]): Promise<number> {
     default:
       printLines([
         'Deltix-Client versioning parity with Deltix-Server Fase 5',
-        'Usage: deltix <version|configure|init|commit|login|logout|whoami|push|pull|fetch|repo|branch|merge|log|diff|roles|sync-prefs|start|stop|status> [...args]',
+        'Usage: deltix <version|configure|init|clone|import|commit|login|logout|whoami|push|pull|fetch|repo|branch|merge|log|diff|roles|sync-prefs|start|stop|status> [...args]',
         '  deltix configure',
         '  deltix init <repo>',
         '  deltix clone <repo>',
+        '  deltix import <repo> --from <dsn>',
         '  deltix commit <message> [tables...]',
         '  deltix push [<repo>]',
         '  deltix pull [<repo>] [--abort]',
