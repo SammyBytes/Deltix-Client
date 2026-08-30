@@ -9,6 +9,32 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.7.1] - 2026-08-30
+
+**In plain terms:** two fixes found while installing Deltix on a machine that
+already runs MySQL/MariaDB. Starting the local engine on a port someone else
+was using used to look like it worked but wasn't — now it tells you straight
+away and points you to a free port. And the local database is now named after
+your repo (so you can `USE demo`), instead of an unreadable code.
+
+### Fixed
+
+- **`deltix start` falsely reported success when the port was already taken.**
+  If another MySQL/Dolt server held `DELTIX_LOCAL_PORT` (e.g. a system MariaDB
+  on 3306), Dolt died trying to bind but the readiness check saw the *other*
+  server's listener and returned "started" — leaving a stale run-state and a
+  dead PID, and a confusing "Access denied" when you then connected. Now a
+  pre-flight probe fails fast with a clear "port in use — set
+  DELTIX_LOCAL_PORT" message before spawning anything.
+- **Opaque local database name.** The local Dolt database was named after the
+  per-checkout hash (the data-dir basename), so creating tables meant
+  `USE <16-hex>`. The data dir now nests the repo under the hash
+  (`projects/<hash>/<repo>`), so Dolt names the database after your repo.
+
+### Tests
+
+- 128 unit tests pass (2 new: port-conflict fail-fast, friendly db name).
+
 ## [0.7.0] - 2026-08-29
 
 **In plain terms:** you can now bring a database you already have into Deltix.
