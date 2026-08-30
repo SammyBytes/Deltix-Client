@@ -1,6 +1,6 @@
 # ADR 0001 — Adoptar una base de datos existente (`deltix import`)
 
-- **Estado:** Propuesto
+- **Estado:** Aceptado (MVP cliente implementado)
 - **Fecha:** 2026-08-29
 - **Alcance:** Deltix-Client (fase servidor se trata aparte, ver *Futuro*)
 - **Decisores:** SammyBytes

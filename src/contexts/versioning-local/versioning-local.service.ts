@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runDoltCommand } from '../../acl/dolt-exec';
 import type { BinaryManager } from '../binary-manager';
@@ -377,6 +378,77 @@ export class VersioningLocalService {
       throw new PushError('log', 'could not resolve branch head after apply');
     }
     return head;
+  }
+
+  /**
+   * Bulk-load tables into the local Dolt working set (used by `deltix import`).
+   * For each table: create it from its DDL (or TRUNCATE if it already exists),
+   * then load rows with `dolt table import -r` (fast, preserves PK/types/NULL).
+   * base64-encoded binary columns are decoded in place with `FROM_BASE64`.
+   * Leaves the changes staged-but-uncommitted for the caller to commit.
+   */
+  async bulkImportTables(
+    id: LocalServerIdentity,
+    tables: { name: string; schema: string; csv: string; base64Columns: string[] }[],
+  ): Promise<void> {
+    const dataDir = computeLocalDataDir(this.deps.homeDir, id);
+    // Import is the "git init" moment: the local repo may not exist yet, so
+    // create the data dir and initialize Dolt before loading.
+    await mkdir(dataDir, { recursive: true });
+    const binaryPath = await this.deps.binaryManager.ensureInstalled();
+    await this.ensureLocalRepo(binaryPath, dataDir, id.repo);
+
+    for (const table of tables) {
+      if (!SAFE_TABLE_RE.test(table.name)) {
+        throw new PushError('import', `refusing to import table with unsafe name "${table.name}"`);
+      }
+      const create = await runDoltCommand(
+        binaryPath,
+        ['--data-dir', dataDir, 'sql', '-q', table.schema],
+        { timeoutMs: 30_000 },
+      );
+      if (create.exitCode !== 0 && !create.stderr.toLowerCase().includes('already exists')) {
+        throw new PushError(`create ${table.name}`, create.stderr.trim());
+      }
+
+      const bodyLines = table.csv.split('\n').filter((l) => l.length > 0);
+      if (bodyLines.length > 1) {
+        const tmp = join(
+          tmpdir(),
+          `deltix-import-${process.pid}-${Math.random().toString(36).slice(2)}.csv`,
+        );
+        await writeFile(tmp, table.csv);
+        try {
+          const imp = await runDoltCommand(
+            binaryPath,
+            ['--data-dir', dataDir, 'table', 'import', '-r', table.name, tmp],
+            { timeoutMs: 120_000 },
+          );
+          if (imp.exitCode !== 0) {
+            throw new PushError(`import ${table.name}`, imp.stderr.trim() || imp.stdout.trim());
+          }
+        } finally {
+          await rm(tmp, { force: true });
+        }
+      }
+
+      for (const col of table.base64Columns) {
+        const fix = await runDoltCommand(
+          binaryPath,
+          [
+            '--data-dir',
+            dataDir,
+            'sql',
+            '-q',
+            `UPDATE ${table.name} SET \`${col}\` = FROM_BASE64(CAST(\`${col}\` AS CHAR))`,
+          ],
+          { timeoutMs: 60_000 },
+        );
+        if (fix.exitCode !== 0) {
+          throw new PushError(`from_base64 ${table.name}.${col}`, fix.stderr.trim());
+        }
+      }
+    }
   }
 
   private async checkoutBranch(binaryPath: string, dataDir: string, branch: string): Promise<void> {
