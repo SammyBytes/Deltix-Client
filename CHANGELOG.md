@@ -9,6 +9,42 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.7.0] - 2026-08-29
+
+**In plain terms:** you can now bring a database you already have into Deltix.
+`deltix import` connects to an existing MySQL/MariaDB database, takes a clean
+snapshot of its current tables and data, and turns it into the starting commit
+of a Deltix repository — so you keep working exactly as before, just versioned.
+If a table holds binary data, Deltix tells you instead of silently corrupting
+it, and lets you choose how to handle those columns.
+
+### Added
+
+- **`deltix import <repo> --from <mysql://dsn>` (ADR 0001).** Adopts an existing
+  MySQL/MariaDB database into the local Deltix repo: reads a consistent snapshot
+  (read-only, `REPEATABLE READ` + `CONSISTENT SNAPSHOT`), recreates every table
+  from its real DDL (preserving primary keys and types), bulk-loads rows with
+  `dolt table import -r`, orders tables by foreign-key dependencies, and makes
+  an initial commit. Reuses the existing `{name, schema, data}` commit contract,
+  so adopted data flows through normal `push`/`pull` unchanged.
+  - Flags: `--table` (subset), `--schema-only`, `--no-commit`, and
+    `--blobs error|base64|skip` (default `error` — aborts and names the offending
+    columns rather than corrupting them; `base64` round-trips binary via
+    `FROM_BASE64`).
+  - The connection string can also come from `DELTIX_IMPORT_URL`, and the
+    password is redacted in all logs and errors.
+  - New `SourceAdapter` abstraction; MySQL/MariaDB is the first implementation
+    (via the pure-JS `mysql2` driver, bundled into the single binary). Postgres
+    and `csv://` are planned as additional adapters.
+
+### Tests
+
+- 126 unit tests pass (13 new: DSN parse/redact, RFC-4180 CSV with NULLs and
+  base64 blobs, topological FK ordering) plus a MySQL-gated integration test.
+  Validated end-to-end against a real MariaDB source and a real Dolt target:
+  tables, quoted commas, NULLs, dates, primary keys, FK order, and exact binary
+  round-trip under all three `--blobs` policies.
+
 ## [0.6.1] - 2026-08-29
 
 **In plain terms:** fixes `deltix init` on Windows. The first Windows build
