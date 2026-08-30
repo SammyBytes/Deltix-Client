@@ -53,8 +53,13 @@ ASSET="deltix-${platform}-${a}"
 # --- Resolve version ----------------------------------------------------------
 if [ -z "$VERSION" ]; then
   log_info "Resolving latest ${REPO} release..."
-  VERSION="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-    | grep -m1 '"tag_name"' | sed -E 's/.*"v?([^"]+)".*/\1/')"
+  # Fetch the JSON to a variable first, then parse WITHOUT an early-exiting
+  # consumer (grep -m1/head closes the pipe -> SIGPIPE -> curl error 23 under
+  # `set -o pipefail`). sed reads the whole input and prints the one match.
+  LATEST_JSON="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest")"
+  VERSION="$(printf '%s' "$LATEST_JSON" \
+    | sed -nE 's/.*"tag_name": *"v?([^"]+)".*/\1/p' \
+    | tr -d '\n')"
   [ -n "$VERSION" ] || { log_error "Could not resolve the latest release. Set VERSION=x.y.z."; exit 1; }
 fi
 TAG="v${VERSION#v}"
