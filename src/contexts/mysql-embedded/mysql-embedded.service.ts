@@ -71,6 +71,13 @@ export interface MysqlEmbeddedDeps {
   spawn?: typeof spawnBackgroundProcess;
   /** Injectable so a unit test can fake port readiness. */
   waitForPort?: (host: string, port: number, timeoutMs: number) => Promise<boolean>;
+  /**
+   * Injectable single-shot probe: is the port already accepting connections?
+   * Used to fail fast when another MySQL/Dolt server holds the port, instead
+   * of spawning a Dolt that dies on bind while the readiness check sees the
+   * *other* server's listener and falsely reports success.
+   */
+  probePort?: (host: string, port: number) => Promise<boolean>;
   /** Injectable for tests to observe cleanup. */
   onSpawned?: (process: BackgroundProcess, args: string[]) => void;
 }
@@ -98,8 +105,11 @@ function sanitizeFilePart(value: string): string {
  * `deltix start` creates.
  */
 export function computeLocalDataDir(homeDir: string, id: LocalServerIdentity): string {
+  // Nest the repo name under the per-checkout hash dir so Dolt's database name
+  // (the data-dir basename) is the friendly repo name — e.g. `USE demo` — while
+  // the hash parent still isolates two checkouts of the same repo.
   return id.projectRoot
-    ? join(homeDir, 'projects', projectStateKey(id.projectRoot))
+    ? join(homeDir, 'projects', projectStateKey(id.projectRoot), sanitizeFilePart(id.repo))
     : join(homeDir, 'repos', sanitizeFilePart(id.repo));
 }
 
@@ -117,6 +127,7 @@ export class MysqlEmbeddedService {
   private readonly now: () => number;
   private readonly spawn: typeof spawnBackgroundProcess;
   private readonly waitForPort: (host: string, port: number, timeoutMs: number) => Promise<boolean>;
+  private readonly probePort: (host: string, port: number) => Promise<boolean>;
 
   constructor(private readonly deps: MysqlEmbeddedDeps) {
     this.homeDir = deps.homeDir;
@@ -126,6 +137,7 @@ export class MysqlEmbeddedService {
     this.now = deps.now ?? Date.now;
     this.spawn = deps.spawn ?? spawnBackgroundProcess;
     this.waitForPort = deps.waitForPort ?? waitForTcpPort;
+    this.probePort = deps.probePort ?? isTcpPortOpen;
   }
 
   dataDirFor(id: LocalServerIdentity): string {
@@ -144,6 +156,14 @@ export class MysqlEmbeddedService {
     if (running.running) {
       const existing = await this.readState(id);
       if (existing) return existing;
+    }
+
+    // Fail fast if the port is already held by another server (e.g. a system
+    // MySQL/MariaDB on 3306). Without this, Dolt dies trying to bind while the
+    // readiness check below sees the *other* server's listener and falsely
+    // reports "started" — leaving a stale run-state and a dead PID.
+    if (await this.probePort(this.localHost, this.localPort)) {
+      throw new LocalServerPortInUseError(this.localHost, this.localPort);
     }
 
     const existing = await this.readState(id);
@@ -180,6 +200,16 @@ export class MysqlEmbeddedService {
     this.deps.onSpawned?.(spawned, args);
 
     const ready = await this.waitForPort(this.localHost, this.localPort, this.readyTimeoutMs);
+    if (ready && exited) {
+      // Our Dolt process exited, yet the port answers — it belongs to some
+      // other server, not ours. Do not write a run-state we cannot honour.
+      throw new LocalServerStartError(
+        id.repo,
+        `the Dolt server exited immediately (port ${this.localHost}:${this.localPort} is likely held by another MySQL/Dolt server — set DELTIX_LOCAL_PORT to a free port)${
+          stderrTail.trim() ? `: ${stderrTail.trim().split('\n').slice(-2).join(' ')}` : ''
+        }`,
+      );
+    }
     if (!ready) {
       // Never leave an orphaned server behind. Decide the failure by whether
       // the process we spawned already exited, rather than probing its PID.
@@ -269,6 +299,20 @@ export class MysqlEmbeddedService {
       { mode: 0o600 },
     );
   }
+}
+
+/** Single-shot probe: is something already accepting connections on host:port? */
+export function isTcpPortOpen(host: string, port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = connect({ host, port, timeout: 500 });
+    const done = (open: boolean) => {
+      socket.destroy();
+      resolve(open);
+    };
+    socket.once('connect', () => done(true));
+    socket.once('error', () => done(false));
+    socket.once('timeout', () => done(false));
+  });
 }
 
 /** Polls a TCP port until it accepts a connection or `timeoutMs` elapses. */
