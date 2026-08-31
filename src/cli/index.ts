@@ -628,10 +628,24 @@ async function runMerge(args: string[]): Promise<number> {
 }
 
 async function runLog(args: string[]): Promise<number> {
-  const [repo, ...flags] = args;
+  const [repoArg, ...flags] = args;
+  // Mirror `deltix push`: when no repo is given, fall back to the project
+  // initialised in cwd so a developer doesn't have to remember the repo name
+  // they typed at `deltix init` time. Without this, `deltix log` from inside a
+  // working tree would print a usage error even though the project context is
+  // unambiguous.
+  let repo = repoArg;
   if (!repo) {
-    printError('Usage: deltix log <repo> [--branch=name] [--limit=N]');
-    return 1;
+    try {
+      const project = await createLocalProjectService().resolve(process.cwd());
+      repo = project.config.repo;
+    } catch (err) {
+      if (err instanceof NoProjectError) {
+        printError('Usage: deltix log <repo> [--branch=name] [--limit=N]');
+        return 1;
+      }
+      throw err;
+    }
   }
 
   const branch = parseFlagValue(flags, 'branch');
@@ -643,7 +657,11 @@ async function runLog(args: string[]): Promise<number> {
       ...(branch ? { branch } : {}),
       ...(limit !== undefined ? { limit } : {}),
     });
-    printTable(log as unknown as Array<Record<string, unknown>>);
+    // Server returns `{ commits: [...], limit }`; printTable expects the row
+    // array directly. The previous `log as unknown as Array<...>` cast hid the
+    // shape mismatch and turned into a runtime `rows.reduce is not a function`
+    // every time anyone ran `deltix log`.
+    printTable(log.commits as unknown as Array<Record<string, unknown>>);
     return 0;
   } catch (err) {
     return handleVersioningError(err, 'Log failed');
