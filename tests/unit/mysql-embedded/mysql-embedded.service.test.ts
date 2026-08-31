@@ -34,6 +34,7 @@ function makeService(
   spawnCalls: string[][];
 } {
   const spawnCalls: string[][] = [];
+  const spawnLogPaths: string[] = [];
   const waitForCalls: number[] = [];
   const service = new MysqlEmbeddedService({
     homeDir: overrides.homeDir ?? '/tmp/mysql-embedded-test',
@@ -43,10 +44,13 @@ function makeService(
     readyTimeoutMs: 100,
     spawn: (_bin, args, opts) => {
       spawnCalls.push(args);
+      spawnCalls[spawnCalls.length - 1] = args;
+      if (opts?.logFilePath) spawnLogPaths.push(opts.logFilePath);
       if (behavior.exitImmediately) opts?.onExit?.(0, null);
       return {
         pid: behavior.pid,
         stderr: new EventEmitter() as unknown as BackgroundProcess['stderr'],
+        logFilePath: opts?.logFilePath ?? null,
       };
     },
     waitForPort: async () => {
@@ -56,7 +60,7 @@ function makeService(
     probePort: async () => false,
     ...overrides,
   });
-  return { service, spawnCalls };
+  return { service, spawnCalls, spawnLogPaths };
 }
 
 describe('mysql-embedded/mysql-embedded.service (unit, mocks)', () => {
@@ -202,6 +206,20 @@ describe('mysql-embedded/mysql-embedded.service (unit, mocks)', () => {
     const dir = service.dataDirFor({ repo: 'demo', projectRoot: '/work/demo' });
     expect(dir.endsWith('demo')).toBe(true);
     expect(dir).toContain(join('projects'));
+    await rm(home, { recursive: true, force: true });
+  });
+
+  it('start() redirects the child stdout/stderr to a log file under home/run (avoids SIGPIPE killing Dolt)', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'deltix-me-log-'));
+    const { service, spawnLogPaths } = makeService({ homeDir: home });
+    await service.start({ repo: 'demo' });
+    expect(spawnLogPaths.length).toBe(1);
+    expect(spawnLogPaths[0]).toContain(join('run'));
+    expect(spawnLogPaths[0]).toMatch(/demo\.sql-server\.log$/);
+    // The run/ directory must exist by the time spawn() is called, otherwise
+    // openSync(logFile, 'a') throws ENOENT and Dolt dies before it starts.
+    const runEntries = await readdir(join(home, 'run'));
+    expect(runEntries.length).toBeGreaterThan(0);
     await rm(home, { recursive: true, force: true });
   });
 });

@@ -30,7 +30,7 @@
  */
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { connect } from 'node:net';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { BackgroundProcess } from '../../acl/dolt-exec';
 import { spawnBackgroundProcess } from '../../acl/dolt-exec';
 import type { BinaryManager } from '../binary-manager';
@@ -96,6 +96,15 @@ function sanitizeFilePart(value: string): string {
   return value.replace(/[^A-Za-z0-9._-]/g, '_');
 }
 
+async function readLogTail(logFilePath: string, maxLen: number): Promise<string> {
+  try {
+    const text = await readFile(logFilePath, 'utf8');
+    return text.length <= maxLen ? text : text.slice(-maxLen);
+  } catch {
+    return '';
+  }
+}
+
 /**
  * Computes the local data-dir a repo checkout is keyed to. With a project
  * root (from `deltix init`) the dir is derived from the absolute checkout
@@ -151,6 +160,11 @@ export class MysqlEmbeddedService {
   async start(id: LocalServerIdentity): Promise<RunState> {
     const dataDir = this.dataDirFor(id);
     await mkdir(dataDir, { recursive: true });
+    // The run-state and the server's combined-output log live side-by-side
+    // under home/run. Make sure that directory exists before spawn() tries
+    // to open the log file, otherwise the child dies with ENOENT before
+    // it even starts.
+    await mkdir(dirname(this.statePath(id)), { recursive: true });
 
     const running = await this.status(id);
     if (running.running) {
@@ -185,21 +199,21 @@ export class MysqlEmbeddedService {
     ];
 
     let exited = false;
-    let stderrTail = '';
+    const logFilePath = join(
+      dirname(this.statePath(id)),
+      `${sanitizeFilePart(id.repo)}.sql-server.log`,
+    );
     const spawned = this.spawn(binaryPath, args, {
       cwd: dataDir,
+      logFilePath,
       onExit: () => {
         exited = true;
       },
     });
-    // Capture the server's stderr so a failed start surfaces the real reason
-    // (Dolt writes fatal config errors here), not a generic timeout.
-    spawned.stderr.on('data', (chunk: Buffer | string) => {
-      stderrTail = (stderrTail + chunk.toString()).slice(-2000);
-    });
     this.deps.onSpawned?.(spawned, args);
 
     const ready = await this.waitForPort(this.localHost, this.localPort, this.readyTimeoutMs);
+    const stderrTail = await readLogTail(logFilePath, 2000);
     if (ready && exited) {
       // Our Dolt process exited, yet the port answers — it belongs to some
       // other server, not ours. Do not write a run-state we cannot honour.
