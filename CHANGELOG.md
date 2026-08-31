@@ -9,6 +9,24 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.7.15] - 2026-08-31
+
+**In plain terms:** two small operator-pain reductions reported in one
+session.
+
+### Fixed
+
+- **`deltix branch list` printed JSON blobs** for each row
+  (`{"name":"feature-test","isCurrent":false}`) because the table printer
+  serialised the `{name, isCurrent}` object inline. Now flattens to a
+  readable two-column table with a `*` marker on the current branch.
+- **`deltix version` claimed the server was `unreachable`** whenever the
+  `/status` endpoint timed out or returned non-2xx, even though the data
+  endpoints were visibly working. Replaced the alarming wording with a
+  quiet "(server version probe unavailable; run any data command to
+  confirm connectivity)" so we don't shout server-down when commands
+  still work.
+
 ## [0.7.14] - 2026-08-31
 
 **In plain terms:** every command that takes a `<repo>` argument now
