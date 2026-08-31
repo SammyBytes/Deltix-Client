@@ -9,6 +9,23 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.7.12] - 2026-08-31
+
+**In plain terms:** when you're logged in (`deltix login hemiblade`),
+the commits you make and push now show up as authored by `hemiblade`
+in `deltix log`, instead of every commit being attributed to a generic
+`deltix` identity.
+
+### Changed
+
+- **Commit author now reflects the logged-in user.** `deltix commit`
+  and `deltix import` use the session username as the dolt commit
+  author, so `deltix log` actually tells you who pushed what. Falls
+  back to the historical `deltix` literal for callers without an
+  active session (tests, scripts) and the auth flag is sanitised to
+  letters/digits/dot/dash/underscore so a maliciously-crafted username
+  can't smuggle CLI args into the dolt invocation (OWASP A03).
+
 ## [0.7.11] - 2026-08-31
 
 **In plain terms:** every command that takes a repo name (e.g.

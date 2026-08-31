@@ -85,6 +85,8 @@ export class ImportService {
         const stamped = await this.deps.local.commit(
           id,
           `adopt ${dsn.database} @ ${new Date().toISOString()}`,
+          undefined,
+          { authorName: req.authorName },
         );
         commitHash = stamped.commitHash;
       }
