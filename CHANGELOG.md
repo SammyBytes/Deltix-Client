@@ -9,6 +9,26 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.7.3] - 2026-08-31
+
+**In plain terms:** you no longer have to type `DELTIX_LOCAL_PORT=3307`
+in front of every command. After the first `deltix start` with the port
+you want, the client remembers it.
+
+### Fixed
+
+- **`deltix start` now remembers the port.** When you have to set
+  `DELTIX_LOCAL_PORT` (because your system already runs MariaDB on 3306),
+  `deltix start` saves it to `~/.deltix/config.json` so every following
+  command (commit, log, push, start, stop, status...) picks it up
+  automatically. Only persists when you set the env var explicitly - the
+  default port is never silently written, so sharing the config across
+  hosts (dotfiles) stays safe.
+
+### Tests
+
+- 133 unit tests pass (4 new).
+
 ## [0.7.2] - 2026-08-31
 
 **In plain terms:** another bug found while trying the local engine for real
