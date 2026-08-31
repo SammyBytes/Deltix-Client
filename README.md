@@ -28,6 +28,24 @@ including Arch):
 curl -fsSL https://raw.githubusercontent.com/SammyBytes/Deltix-Client/main/scripts/get-deltix-client.sh | bash
 ```
 
+Windows (PowerShell one-liner, no admin required):
+
+```powershell
+# Latest release, install to $HOME\.local\bin\deltix.exe
+iex "& { $(irm https://raw.githubusercontent.com/SammyBytes/Deltix-Client/main/scripts/get-deltix-client.ps1) }"
+
+# Pin a version
+$env:VERSION = '0.7.17'
+iex "& { $(irm https://raw.githubusercontent.com/SammyBytes/Deltix-Client/main/scripts/get-deltix-client.ps1) }"
+Remove-Item Env:VERSION
+
+# System-wide install (admin prompt once; writes to C:\Program Files\Deltix)
+iex "& { $(irm https://raw.githubusercontent.com/SammyBytes/Deltix-Client/main/scripts/get-deltix-client.ps1) } -System"
+```
+
+Both flavours verify the asset's published SHA-256 against `Get-FileHash`
+before installing — same integrity guarantee as the bash installer.
+
 Windows (Scoop bucket ships in this repo):
 
 ```powershell
