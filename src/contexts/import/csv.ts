@@ -32,6 +32,13 @@ export function serializeTable(
         }
         return '';
       }
+      // MySQL JSON columns come back from mysql2 as parsed JavaScript
+      // objects (not strings), so String(value) would produce the unhelpful
+      // '[object Object]'. Round-trip via JSON.stringify so the value lands
+      // in Dolt as the same JSON document it had in MySQL.
+      if (typeof value === 'object') {
+        return csvField(JSON.stringify(value));
+      }
       return csvField(String(value));
     });
     lines.push(cells.join(','));
