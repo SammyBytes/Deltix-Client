@@ -475,6 +475,8 @@ async function runImport(args: string[]): Promise<number> {
       }
     }
     const identity = { repo: project.config.repo, projectRoot: project.root };
+    const sessionStatus = await createSessionService().status();
+    const authorName = sessionStatus.loggedIn ? sessionStatus.username : undefined;
     const result = await createImportService().import(identity, {
       from: dsnWithPromptedSecret,
       tables: flagMulti(args, 'table'),
@@ -482,6 +484,7 @@ async function runImport(args: string[]): Promise<number> {
       continueOnRowError,
       noCommit: args.includes('--no-commit'),
       blobs,
+      authorName,
     });
     printSuccess(`Imported ${result.tablesImported} table(s) from ${result.database}`, {
       commit: result.commitHash ?? '(not committed — --no-commit)',
@@ -1165,10 +1168,15 @@ async function runCommit(args: string[]): Promise<number> {
     const project = await createLocalProjectService().resolve(process.cwd());
     const identity = { repo: project.config.repo, projectRoot: project.root };
     const { BinaryManager } = await import('../contexts/binary-manager');
+    // Use the logged-in user (if any) as the dolt commit author so audit
+    // trails reflect who actually made the change. Falls back to the
+    // historical 'deltix' identity when not logged in.
+    const sessionStatus = await createSessionService().status();
+    const authorName = sessionStatus.loggedIn ? sessionStatus.username : undefined;
     const result = await new VersioningLocalService({
       homeDir: process.env.DELTIX_HOME ?? join(homedir(), '.deltix'),
       binaryManager: new BinaryManager(),
-    }).commit(identity, message, tables.length > 0 ? tables : undefined);
+    }).commit(identity, message, tables.length > 0 ? tables : undefined, { authorName });
     printSuccess(`Committed to ${result.repo}`, {
       commitHash: result.commitHash,
       message,

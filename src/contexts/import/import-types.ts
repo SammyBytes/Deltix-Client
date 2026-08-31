@@ -64,4 +64,10 @@ export interface ImportOptions {
    * skipped, but you should still inspect the source DB for the cause.
    */
   continueOnRowError?: boolean;
+  /**
+   * Dolt author identity for the import commit. Defaults to 'deltix' when
+   * not provided; the CLI passes the logged-in username so audit trails
+   * reflect who actually made the change.
+   */
+  authorName?: string;
 }

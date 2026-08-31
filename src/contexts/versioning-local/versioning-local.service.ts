@@ -130,6 +130,7 @@ export class VersioningLocalService {
     id: LocalServerIdentity,
     message: string,
     tables?: string[],
+    options: { authorName?: string } = {},
   ): Promise<LocalCommitResult> {
     const dataDir = computeLocalDataDir(this.deps.homeDir, id);
     if (!existsSync(dataDir)) {
@@ -147,10 +148,18 @@ export class VersioningLocalService {
       throw new CommitError('add', addResult.stderr);
     }
 
+    // `--author` must be a safe identifier-ish string; restrit the name to
+    // letters/digits/dot/dash/underscore so it can't smuggle CLI flags or
+    // extra args into the dolt invocation (OWASP A03). Falls back to the
+    // historical `deltix` literal when no session username is available, so
+    // pre-session callers (tests, scripts) keep working unchanged.
+    const safeAuthor = (options.authorName ?? 'deltix').replace(/[^A-Za-z0-9_.-]/g, '_');
+    const authorFlag = `${safeAuthor} <${safeAuthor}@deltix.local>`;
+
     // Commit — may fail with exit code 1 if there are no staged changes.
     const commitResult = await runDoltCommand(
       binaryPath,
-      ['--data-dir', dataDir, 'commit', '-m', message, '--author=deltix <deltix@deltix.local>'],
+      ['--data-dir', dataDir, 'commit', '-m', message, `--author=${authorFlag}`],
       { timeoutMs: 30_000 },
     );
     if (commitResult.exitCode !== 0) {
