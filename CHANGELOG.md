@@ -9,6 +9,26 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.7.13] - 2026-08-31
+
+**In plain terms:** three small UX bugs from the same session squashed in
+one release: branch and merge success messages now show readable key/value
+lines instead of JSON blobs, and `deltix log` accepts the short `-b` /
+`-n` flags.
+
+### Fixed
+
+- **`deltix branch create/checkout` printed a JSON blob** in the success
+  detail (e.g. `branch: {"currentBranch":"main","createdBranch":"foo"}`)
+  because the CLI passed the API's typed response straight into the
+  key-value printer. Now flattens to `current: main / created: foo`.
+- **`deltix merge` printed `merge: {...}`** for the same reason; now
+  shows `source / target / commitHash / status` plus a "(fast-forward)"
+  note when applicable.
+- **`deltix log` only accepted the long form `--branch=name`**.
+  Added short forms: `--branch X` / `-b X` and `--limit N` / `-n N`,
+  and updated the usage text to show them.
+
 ## [0.7.12] - 2026-08-31
 
 **In plain terms:** when you're logged in (`deltix login hemiblade`),

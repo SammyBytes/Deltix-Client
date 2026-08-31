@@ -601,7 +601,13 @@ async function runBranch(args: string[]): Promise<number> {
         );
         if (!params) return 1;
         const branch = await service.createBranch(params.repo, params.name);
-        printSuccess(`Branch created in ${params.repo}`, { branch });
+        // Spread the API response into flat key/value pairs instead of letting
+        // printSuccess serialize the object as a single JSON blob on one
+        // line (which is unreadable and looks like an error to operators).
+        printSuccess(`Branch created in ${params.repo}`, {
+          current: branch.currentBranch,
+          created: branch.createdBranch,
+        });
         return 0;
       }
       case 'checkout': {
@@ -612,7 +618,9 @@ async function runBranch(args: string[]): Promise<number> {
         );
         if (!params) return 1;
         const branch = await service.checkoutBranch(params.repo, params.name);
-        printSuccess(`Checked out ${params.repo}`, { branch });
+        printSuccess(`Checked out ${params.repo}`, {
+          current: branch.currentBranch,
+        });
         return 0;
       }
       case 'delete': {
@@ -623,7 +631,7 @@ async function runBranch(args: string[]): Promise<number> {
         );
         if (!params) return 1;
         await service.deleteBranch(params.repo, params.name);
-        printSuccess(`Branch deleted in ${params.repo}`, { branch: params.name });
+        printSuccess(`Branch deleted in ${params.repo}`, { deleted: params.name });
         return 0;
       }
       case 'current': {
@@ -704,7 +712,12 @@ async function runMerge(args: string[]): Promise<number> {
 
   try {
     const merge = await createVersioningService().merge(repo, sourceBranch, targetBranch);
-    printSuccess(`Merge completed for ${repo}`, { merge });
+    printSuccess(`Merge completed for ${repo}` + (merge.fastForward ? ' (fast-forward)' : ''), {
+      source: merge.sourceBranch,
+      target: merge.targetBranch,
+      commitHash: merge.commitHash,
+      status: merge.status,
+    });
     return 0;
   } catch (err) {
     if (err instanceof MergeConflictError) {
@@ -729,15 +742,18 @@ async function runLog(args: string[]): Promise<number> {
       repo = project.config.repo;
     } catch (err) {
       if (err instanceof NoProjectError) {
-        printError('Usage: deltix log <repo> [--branch=name] [--limit=N]');
+        printError(
+          'Usage: deltix log <repo> [--branch=name|-b name] [--limit=N|-n N]   (omit <repo> to use the cwd project)',
+        );
         return 1;
       }
       throw err;
     }
   }
 
-  const branch = parseFlagValue(flags, 'branch');
-  const limitValue = parseFlagValue(flags, 'limit');
+  // Accept both --branch=foo (long) and --branch foo or -b foo (shell-friendly).
+  const branch = parseFlagValue(flags, 'branch') ?? flagValue(flags, 'b');
+  const limitValue = parseFlagValue(flags, 'limit') ?? parseFlagValue(flags, 'n');
   const limit = limitValue ? Number(limitValue) : undefined;
 
   try {
