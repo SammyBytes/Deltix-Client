@@ -1,6 +1,6 @@
 {
   "name": "deltix-client",
-  "version": "0.7.17",
+  "version": "0.7.18",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -19,8 +19,6 @@
     "test:smoke": "bun test tests/smoke"
   },
   "dependencies": {
-    "@grpc/grpc-js": "1.14.4",
-    "@grpc/proto-loader": "0.8.1",
     "consola": "^3.4.2",
     "mysql2": "^3.24.2",
     "pino": "10.3.1",
