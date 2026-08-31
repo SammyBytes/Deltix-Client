@@ -9,6 +9,22 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.7.6] - 2026-08-31
+
+**In plain terms:** `deltix login` no longer needs your password on the
+command line. By default it prompts for it with the input hidden; if you
+do pass it as an argument (backward compatible) it warns you that the
+secret just landed in your shell history.
+
+### Changed
+
+- **`deltix login` defaults to a masked password prompt.** Precedence:
+  1. `--password=<value>` (no warning — explicit opt-in)
+  2. positional `<password>` (logs a one-line "now in your shell history" warning)
+  3. `DELTIX_LOGIN_PASSWORD` env var (logs a "visible to other processes" warning)
+  4. interactive TTY prompt, masked (the safe default).
+  Empty password or non-TTY without an env var now errors with a clear message instead of returning an empty credential.
+
 ## [0.7.5] - 2026-08-31
 
 **In plain terms:** two UX/security wins for `deltix import`. The CLI now
