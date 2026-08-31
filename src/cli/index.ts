@@ -78,10 +78,49 @@ import {
 } from './output';
 
 async function runLogin(args: string[]): Promise<number> {
-  const [username, password] = args;
-  if (!username || !password) {
-    printError('Usage: deltix login <username> <password>');
+  const [username, passwordArg] = args;
+  if (!username) {
+    printError(
+      'Usage: deltix login <username> [password]  (interactive prompt when password is omitted)',
+    );
     return 1;
+  }
+
+  // Resolve the secret with a clear preference order:
+  //   1. --password=<value>  → explicit, for scripts that know what they're
+  //                            doing and accept the shell-history exposure.
+  //   2. positional arg      → kept for backward compatibility, but warn
+  //                            so the operator knows it just hit ~/.zsh_history.
+  //   3. TTY prompt          → masked (the safe default).
+  //   4. DELTIX_LOGIN_PASSWORD env var → for non-interactive scripts; warn
+  //                            once at use site because 'ps' leaks env.
+  let password = flagValue(args, 'password') ?? passwordArg ?? process.env.DELTIX_LOGIN_PASSWORD;
+  let passwordSource: 'flag' | 'argv' | 'env' | 'prompt' | null = password
+    ? password === passwordArg
+      ? 'argv'
+      : password === process.env.DELTIX_LOGIN_PASSWORD
+        ? 'env'
+        : 'flag'
+    : null;
+
+  if (!password && process.stdin.isTTY) {
+    password = await promptSecret(`Password for ${username}`);
+    passwordSource = 'prompt';
+  }
+
+  if (!password) {
+    printError(
+      'No password provided. Pass it as an argument, set DELTIX_LOGIN_PASSWORD, or run interactively.',
+    );
+    return 1;
+  }
+
+  if (passwordSource === 'argv') {
+    printInfo('Note: password passed as a positional argument. It is now in your shell history.');
+  } else if (passwordSource === 'env') {
+    printInfo(
+      'Note: password read from DELTIX_LOGIN_PASSWORD. Other processes on this host can read it via /proc.',
+    );
   }
 
   try {
