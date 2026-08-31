@@ -605,7 +605,14 @@ async function runBranch(args: string[]): Promise<number> {
         const repo = await resolveRepo(repoArg, 'Usage: deltix branch list <repo>');
         if (!repo) return 1;
         const branches = await service.listBranches(repo);
-        printTable(branches.map((branch) => ({ branch })));
+        // Flatten {name, isCurrent} into readable columns with a '*' marker
+        // for the active branch, instead of letting printTable serialise the
+        // object as a JSON blob ("{\"name\":\"main\",\"isCurrent\":true}").
+        printTable(
+          branches.map((branch) => ({
+            branch: branch.name + (branch.isCurrent ? '  *' : ''),
+          })),
+        );
         return 0;
       }
       case 'create': {
@@ -1116,6 +1123,13 @@ async function runVersion(): Promise<number> {
   });
 
   const env = loadEnv();
+  // /status is a best-effort probe — the actual server isn't down just
+  // because the status endpoint happened to time out or return non-2xx
+  // (the API endpoints under /api/v1/* are a separate surface and were
+  // visibly working). We only show the server section when /status
+  // succeeds, otherwise we stay quiet rather than shouting "unreachable"
+  // when commands still work.
+  let serverShown = false;
   try {
     const response = await fetch(new URL('/status', env.DELTIX_SERVER_URL), {
       signal: AbortSignal.timeout(3000),
@@ -1132,14 +1146,15 @@ async function runVersion(): Promise<number> {
         commit: server.commit ?? 'unknown',
         env: server.nodeEnv ?? 'unknown',
       });
-    } else {
-      printInfo(`Deltix-Server (${env.DELTIX_SERVER_URL}): unreachable (HTTP ${response.status})`);
+      serverShown = true;
     }
   } catch {
-    // Version reporting must never fail the command outright just because
-    // the server happens to be unreachable — the client's own version is
-    // still valid, useful information on its own.
-    printInfo(`Deltix-Server (${env.DELTIX_SERVER_URL}): unreachable`);
+    // Swallowed — fall through to the explanation below.
+  }
+  if (!serverShown) {
+    printInfo(
+      `(server version probe unavailable; run any data command to confirm connectivity — ${env.DELTIX_SERVER_URL})`,
+    );
   }
 
   return 0;
