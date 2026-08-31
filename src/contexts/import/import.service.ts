@@ -76,7 +76,9 @@ export class ImportService {
         throw new ImportBlobError(blobOffenders);
       }
 
-      await this.deps.local.bulkImportTables(id, loads);
+      await this.deps.local.bulkImportTables(id, loads, {
+        continueOnRowError: req.continueOnRowError,
+      });
 
       let commitHash: string | null = null;
       if (!req.noCommit && loads.length > 0) {

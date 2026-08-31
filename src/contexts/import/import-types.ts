@@ -56,4 +56,12 @@ export interface ImportOptions {
   schemaOnly?: boolean;
   /** Binary column policy (default `error`). */
   blobs?: BlobPolicy;
+  /**
+   * Forwarded to `dolt table import --continue`: when a row violates a
+   * constraint (NOT NULL violated, type coercion, etc.) skip that row and
+   * keep going instead of aborting the whole table. Use with care — the
+   * summary at the end of `deltix import` reports how many rows were
+   * skipped, but you should still inspect the source DB for the cause.
+   */
+  continueOnRowError?: boolean;
 }
