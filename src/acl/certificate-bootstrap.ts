@@ -69,7 +69,7 @@ export function fetchServerCertificate(
         try {
           const cert = socket.getPeerCertificate(false);
           socket.end();
-          if (!cert || !cert.raw) {
+          if (!cert?.raw) {
             reject(new CertificateFetchError(host, port, 'server presented no certificate'));
             return;
           }

@@ -79,6 +79,42 @@ import {
   promptText,
 } from './output';
 
+/**
+ * Separate CLI flags from positional arguments so commands don't care
+ * about ordering.  Anything starting with `-` is treated as a flag;
+ * when a flag doesn't contain `=` and the next arg doesn't start with
+ * `-`, the next arg is consumed as the flag's value (not a positional).
+ *
+ * Examples:
+ *   splitPositionalsAndFlags(['-n', '5', 'hmc-sync'])
+ *     → { positionals: ['hmc-sync'], flags: ['-n', '5'] }
+ *   splitPositionalsAndFlags(['hmc-sync', '--branch=main'])
+ *     → { positionals: ['hmc-sync'], flags: ['--branch=main'] }
+ */
+function splitPositionalsAndFlags(args: string[]): {
+  positionals: string[];
+  flags: string[];
+} {
+  const positionals: string[] = [];
+  const flags: string[] = [];
+  let i = 0;
+  while (i < args.length) {
+    if (args[i].startsWith('-')) {
+      flags.push(args[i]);
+      if (!args[i].includes('=') && i + 1 < args.length && !args[i + 1].startsWith('-')) {
+        flags.push(args[i + 1]);
+        i += 2;
+      } else {
+        i += 1;
+      }
+    } else {
+      positionals.push(args[i]);
+      i += 1;
+    }
+  }
+  return { positionals, flags };
+}
+
 async function runLogin(args: string[]): Promise<number> {
   const [username, passwordArg] = args;
   if (!username) {
@@ -760,7 +796,10 @@ async function runMerge(args: string[]): Promise<number> {
 }
 
 async function runLog(args: string[]): Promise<number> {
-  const [repoArg, ...flags] = args;
+  // Separate flags from positionals so `deltix log -n 5 hmc-sync` works
+  // regardless of flag position (like git log -n 5 <branch>).
+  const { positionals, flags } = splitPositionalsAndFlags(args);
+  const repoArg = positionals[0];
   // Mirror `deltix push`: when no repo is given, fall back to the project
   // initialised in cwd so a developer doesn't have to remember the repo name
   // they typed at `deltix init` time. Without this, `deltix log` from inside a
@@ -1516,4 +1555,4 @@ if (import.meta.main) {
   process.exit(exitCode);
 }
 
-export { parseFlagValue, persistLocalPortIfExplicit };
+export { parseFlagValue, persistLocalPortIfExplicit, splitPositionalsAndFlags };

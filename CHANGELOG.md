@@ -9,6 +9,27 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.7.19] - 2026-08-31
+
+**In plain terms:** `deltix log` now accepts flags before the repo name
+(`deltix log -n 5 hmc-sync` works just like `git log -n 5`).
+
+### Fixed
+
+- **`deltix log -n 5 <repo>` and `deltix log --branch=x <repo>` now work
+  regardless of flag position.** A new `splitPositionalsAndFlags` helper
+  separates flags (anything starting with `-`) from positional args, so
+  `deltix log -n 5 hmc-sync`, `deltix log hmc-sync -n 5`, and
+  `deltix log hmc-sync --limit=5` all behave identically. The previous
+  destructuring `const [repoArg, ...flags] = args` took the first arg as
+  the repo unconditionally, which meant `deltix log -n 5 hmc-sync` treated
+  `-n` as the repo name and failed with "Repo not found: -n".
+
+- **Minor lint fix** in `certificate-bootstrap.ts`: `!cert || !cert.raw` →
+  `!cert?.raw` (optional chaining, biome suggestion).
+
+---
+
 ## [0.7.18] - 2026-08-31
 
 **In plain terms:** the client no longer talks gRPC, and the operator
