@@ -66,6 +66,7 @@ import {
 } from '../contexts/versioning-local';
 import { getClientBuildInfo } from '../shared/build-info';
 import { applyPersistedConfigDefaults, loadEnv } from '../shared/env';
+import { buildFetchTlsOptions } from '../shared/http-tls';
 import {
   printError,
   printInfo,
@@ -1123,6 +1124,14 @@ async function runVersion(): Promise<number> {
   });
 
   const env = loadEnv();
+  // Same TLS config the data API uses — otherwise the probe fails with
+  // "self signed certificate" against a TLS server with a self-signed
+  // cert even though /api/v1/* requests succeed, just because the probe
+  // passes through raw `fetch()` without a CA override.
+  const tls = buildFetchTlsOptions({
+    caCertPath: env.DELTIX_HTTP_TLS_CA_PATH,
+    serverNameOverride: env.DELTIX_HTTP_TLS_SERVER_NAME_OVERRIDE,
+  });
   // /status is a best-effort probe — the actual server isn't down just
   // because the status endpoint happened to time out or return non-2xx
   // (the API endpoints under /api/v1/* are a separate surface and were
@@ -1133,6 +1142,7 @@ async function runVersion(): Promise<number> {
   try {
     const response = await fetch(new URL('/status', env.DELTIX_SERVER_URL), {
       signal: AbortSignal.timeout(3000),
+      ...(tls ? { tls } : {}),
     });
     if (response.ok) {
       const server = (await response.json()) as {
@@ -1442,6 +1452,7 @@ export async function runCli(argv: string[]): Promise<number> {
       printLines([
         'Deltix-Client versioning parity with Deltix-Server Fase 5',
         'Usage: deltix <version|configure|init|clone|import|commit|login|logout|whoami|push|pull|fetch|repo|branch|merge|log|diff|roles|sync-prefs|start|stop|status> [...args]',
+        'When run from a `deltix init`-ed working tree, [<repo>] becomes optional — the cwd project wins.',
         '  deltix configure',
         '  deltix init <repo>',
         '  deltix clone <repo>',
@@ -1455,22 +1466,22 @@ export async function runCli(argv: string[]): Promise<number> {
         '  deltix status [<repo>]',
         '  deltix repo create <repo>',
         '  deltix repo list',
-        '  deltix repo get <repo>',
-        '  deltix branch list <repo>',
+        '  deltix repo get [<repo>]',
+        '  deltix branch list [<repo>]',
         '  deltix branch local [<repo>]',
-        '  deltix branch create <repo> <name>',
-        '  deltix branch checkout <repo> <name>',
-        '  deltix branch delete <repo> <name>',
-        '  deltix branch current <repo>',
-        '  deltix merge <repo> <sourceBranch> [targetBranch]',
-        '  deltix log <repo> [--branch=name] [--limit=N]',
-        '  deltix diff <repo> <from> <to>',
-        '  deltix roles list <repo>',
-        '  deltix roles grant <repo> <username> <reader|writer|admin>',
-        '  deltix roles revoke <repo> <username>',
-        '  deltix sync-prefs get <repo>',
-        '  deltix sync-prefs set <repo> <schema-only|schema-and-data> [tables...]',
-        '  deltix sync-prefs dry-run <repo> [tables...]',
+        '  deltix branch create [<repo>] <name>',
+        '  deltix branch checkout [<repo>] <name>',
+        '  deltix branch delete [<repo>] <name>',
+        '  deltix branch current [<repo>]',
+        '  deltix merge [<repo>] <sourceBranch> [targetBranch]',
+        '  deltix log [<repo>] [--branch=name|-b name] [--limit=N|-n N]',
+        '  deltix diff [<repo>] <from> <to>',
+        '  deltix roles list [<repo>]',
+        '  deltix roles grant [<repo>] <username> <reader|writer|admin>',
+        '  deltix roles revoke [<repo>] <username>',
+        '  deltix sync-prefs get [<repo>]',
+        '  deltix sync-prefs set [<repo>] <schema-only|schema-and-data> [tables...]',
+        '  deltix sync-prefs dry-run [<repo>] [tables...]',
       ]);
       return command ? 1 : 0;
   }
