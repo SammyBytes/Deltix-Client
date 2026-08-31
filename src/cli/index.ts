@@ -557,24 +557,39 @@ function logMergeConflict(err: MergeConflictError): void {
   printTable(err.conflicts.map((conflict) => ({ table: conflict.table, count: conflict.count })));
 }
 
-function requireRepo(repo: string | undefined, usage: string): string | null {
-  if (!repo) {
-    printError(usage);
-    return null;
+/**
+ * Resolves the repo for a server-only command (no local context needed).
+ * If `repoArg` is given, use it. Otherwise fall back to the cwd project
+ * (the same behaviour `deltix push` / `log` already had via
+ * `resolveServerIdentity`). Mirrors the per-project model so the operator
+ * rarely has to type the repo name.
+ */
+async function resolveRepo(repoArg: string | undefined, usage: string): Promise<string | null> {
+  if (repoArg) return repoArg;
+  try {
+    const project = await createLocalProjectService().resolve(process.cwd());
+    return project.config.repo;
+  } catch (err) {
+    if (err instanceof NoProjectError) {
+      printError(usage);
+      return null;
+    }
+    throw err;
   }
-  return repo;
 }
 
-function requireRepoAndName(
-  repo: string | undefined,
-  name: string | undefined,
+async function resolveRepoAndName(
+  repoArg: string | undefined,
+  nameArg: string | undefined,
   usage: string,
-): { repo: string; name: string } | null {
-  if (!repo || !name) {
+): Promise<{ repo: string; name: string } | null> {
+  const repo = await resolveRepo(repoArg, usage);
+  if (!repo) return null;
+  if (!nameArg) {
     printError(usage);
     return null;
   }
-  return { repo, name };
+  return { repo, name: nameArg };
 }
 
 async function runBranch(args: string[]): Promise<number> {
@@ -587,14 +602,14 @@ async function runBranch(args: string[]): Promise<number> {
     const service = createVersioningService();
     switch (action) {
       case 'list': {
-        const repo = requireRepo(repoArg, 'Usage: deltix branch list <repo>');
+        const repo = await resolveRepo(repoArg, 'Usage: deltix branch list <repo>');
         if (!repo) return 1;
         const branches = await service.listBranches(repo);
         printTable(branches.map((branch) => ({ branch })));
         return 0;
       }
       case 'create': {
-        const params = requireRepoAndName(
+        const params = await resolveRepoAndName(
           repoArg,
           nameArg,
           'Usage: deltix branch create <repo> <name>',
@@ -611,7 +626,7 @@ async function runBranch(args: string[]): Promise<number> {
         return 0;
       }
       case 'checkout': {
-        const params = requireRepoAndName(
+        const params = await resolveRepoAndName(
           repoArg,
           nameArg,
           'Usage: deltix branch checkout <repo> <name>',
@@ -624,7 +639,7 @@ async function runBranch(args: string[]): Promise<number> {
         return 0;
       }
       case 'delete': {
-        const params = requireRepoAndName(
+        const params = await resolveRepoAndName(
           repoArg,
           nameArg,
           'Usage: deltix branch delete <repo> <name>',
@@ -635,7 +650,7 @@ async function runBranch(args: string[]): Promise<number> {
         return 0;
       }
       case 'current': {
-        const repo = requireRepo(repoArg, 'Usage: deltix branch current <repo>');
+        const repo = await resolveRepo(repoArg, 'Usage: deltix branch current <repo>');
         if (!repo) return 1;
         const branch = await service.getCurrentBranch(repo);
         printInfo(`Current branch for ${repo}: ${branch}`);
@@ -676,8 +691,11 @@ async function runRepo(args: string[]): Promise<number> {
     const service = createVersioningService();
     switch (action) {
       case 'create': {
-        const repo = requireRepo(repoArg, 'Usage: deltix repo create <repo>');
-        if (!repo) return 1;
+        const repo = repoArg;
+        if (!repo) {
+          printError('Usage: deltix repo create <repo>');
+          return 1;
+        }
         const created = await service.createRepo(repo);
         printSuccess('Repo created', { repo: created });
         return 0;
@@ -688,7 +706,7 @@ async function runRepo(args: string[]): Promise<number> {
         return 0;
       }
       case 'get': {
-        const repo = requireRepo(repoArg, 'Usage: deltix repo get <repo>');
+        const repo = await resolveRepo(repoArg, 'Usage: deltix repo get <repo>');
         if (!repo) return 1;
         const found = await service.getRepo(repo);
         printKeyValues({ repo: found });
@@ -704,11 +722,12 @@ async function runRepo(args: string[]): Promise<number> {
 }
 
 async function runMerge(args: string[]): Promise<number> {
-  const [repo, sourceBranch, targetBranch] = args;
-  if (!repo || !sourceBranch) {
-    printError('Usage: deltix merge <repo> <sourceBranch> [targetBranch]');
-    return 1;
-  }
+  const [repoArg, sourceBranch, targetBranch] = args;
+  const repo = await resolveRepo(
+    repoArg,
+    'Usage: deltix merge <repo> <sourceBranch> [targetBranch]',
+  );
+  if (!repo || !sourceBranch) return 1;
 
   try {
     const merge = await createVersioningService().merge(repo, sourceBranch, targetBranch);
@@ -773,11 +792,9 @@ async function runLog(args: string[]): Promise<number> {
 }
 
 async function runDiff(args: string[]): Promise<number> {
-  const [repo, from, to] = args;
-  if (!repo || !from || !to) {
-    printError('Usage: deltix diff <repo> <from> <to>');
-    return 1;
-  }
+  const [repoArg, from, to] = args;
+  const repo = await resolveRepo(repoArg, 'Usage: deltix diff <repo> <from> <to>');
+  if (!repo || !from || !to) return 1;
 
   try {
     const diff = await createVersioningService().getDiff(repo, from, to);
@@ -790,9 +807,9 @@ async function runDiff(args: string[]): Promise<number> {
 }
 
 async function runRoles(args: string[]): Promise<number> {
-  const [action, repo, username, role] = args;
+  const [action, repoArg, username, role] = args;
   if (!action) {
-    printError('Usage: deltix roles <list|grant|revoke> <repo> [username] [role]');
+    printError('Usage: deltix roles <list|grant|revoke> [repo] [username] [role]');
     return 1;
   }
 
@@ -800,17 +817,18 @@ async function runRoles(args: string[]): Promise<number> {
     const service = createVersioningService();
     switch (action) {
       case 'list': {
-        if (!repo) {
-          printError('Usage: deltix roles list <repo>');
-          return 1;
-        }
+        const repo = await resolveRepo(repoArg, 'Usage: deltix roles list <repo>');
+        if (!repo) return 1;
         const roles = await service.listRoles(repo);
         printTable(roles as unknown as Array<Record<string, unknown>>);
         return 0;
       }
       case 'grant': {
+        const repo = await resolveRepo(
+          repoArg,
+          'Usage: deltix roles grant <repo> <username> <reader|writer|admin>',
+        );
         if (!repo || !username || !role || !['reader', 'writer', 'admin'].includes(role)) {
-          printError('Usage: deltix roles grant <repo> <username> <reader|writer|admin>');
           return 1;
         }
         const assignment = await service.grantRole(
@@ -822,10 +840,8 @@ async function runRoles(args: string[]): Promise<number> {
         return 0;
       }
       case 'revoke': {
-        if (!repo || !username) {
-          printError('Usage: deltix roles revoke <repo> <username>');
-          return 1;
-        }
+        const repo = await resolveRepo(repoArg, 'Usage: deltix roles revoke <repo> <username>');
+        if (!repo || !username) return 1;
         await service.revokeRole(repo, username);
         printSuccess(`Role revoked in ${repo}`, { username });
         return 0;
@@ -841,12 +857,10 @@ async function runRoles(args: string[]): Promise<number> {
 
 async function runSyncPrefsGet(
   service: ReturnType<typeof createVersioningService>,
-  repo: string | undefined,
+  repoArg: string | undefined,
 ): Promise<number> {
-  if (!repo) {
-    printError('Usage: deltix sync-prefs get <repo>');
-    return 1;
-  }
+  const repo = await resolveRepo(repoArg, 'Usage: deltix sync-prefs get <repo>');
+  if (!repo) return 1;
   const preference = await service.getSyncPreferences(repo);
   printKeyValues((preference ?? {}) as Record<string, unknown>);
   return 0;
@@ -854,14 +868,15 @@ async function runSyncPrefsGet(
 
 async function runSyncPrefsSet(
   service: ReturnType<typeof createVersioningService>,
-  repo: string | undefined,
+  repoArg: string | undefined,
   mode: string | undefined,
   tables: string[],
 ): Promise<number> {
-  if (!repo || !mode || !['schema-only', 'schema-and-data'].includes(mode)) {
-    printError('Usage: deltix sync-prefs set <repo> <schema-only|schema-and-data> [tables...]');
-    return 1;
-  }
+  const repo = await resolveRepo(
+    repoArg,
+    'Usage: deltix sync-prefs set <repo> <schema-only|schema-and-data> [tables...]',
+  );
+  if (!repo || !mode || !['schema-only', 'schema-and-data'].includes(mode)) return 1;
   const preference = await service.setSyncPreferences(
     repo,
     mode === 'schema-only' ? 'schema_only' : 'schema_and_data',
@@ -876,14 +891,12 @@ async function runSyncPrefsSet(
 
 async function runSyncPrefsDryRun(
   service: ReturnType<typeof createVersioningService>,
-  repo: string | undefined,
+  repoArg: string | undefined,
   mode: string | undefined,
   tables: string[],
 ): Promise<number> {
-  if (!repo) {
-    printError('Usage: deltix sync-prefs dry-run <repo> [tables...]');
-    return 1;
-  }
+  const repo = await resolveRepo(repoArg, 'Usage: deltix sync-prefs dry-run <repo> [tables...]');
+  if (!repo) return 1;
   const requestedTables = mode ? [mode, ...tables] : tables;
   // Honor the previously saved sync-preference mode instead of silently
   // forcing schema_and_data — a stored schema_only preference must not be
@@ -900,9 +913,9 @@ async function runSyncPrefsDryRun(
 }
 
 async function runSyncPrefs(args: string[]): Promise<number> {
-  const [action, repo, mode, ...tables] = args;
+  const [action, repoArg, mode, ...tables] = args;
   if (!action) {
-    printError('Usage: deltix sync-prefs <get|set|dry-run> <repo> [mode] [tables...]');
+    printError('Usage: deltix sync-prefs <get|set|dry-run> [repo] [mode] [tables...]');
     return 1;
   }
 
@@ -910,13 +923,13 @@ async function runSyncPrefs(args: string[]): Promise<number> {
     const service = createVersioningService();
     switch (action) {
       case 'get':
-        return runSyncPrefsGet(service, repo);
+        return runSyncPrefsGet(service, repoArg);
       case 'set':
-        return runSyncPrefsSet(service, repo, mode, tables);
+        return runSyncPrefsSet(service, repoArg, mode, tables);
       case 'dry-run':
-        return runSyncPrefsDryRun(service, repo, mode, tables);
+        return runSyncPrefsDryRun(service, repoArg, mode, tables);
       default:
-        printError('Usage: deltix sync-prefs <get|set|dry-run> <repo> [mode] [tables...]');
+        printError('Usage: deltix sync-prefs <get|set|dry-run> [repo] [mode] [tables...]');
         return 1;
     }
   } catch (err) {
