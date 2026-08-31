@@ -9,6 +9,25 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.7.11] - 2026-08-31
+
+**In plain terms:** every command that takes a repo name (e.g.
+`deltix push hmc-sync`, `deltix log foo`) now correctly uses the cwd
+project's local working tree, instead of looking for an old-style flat
+data dir that almost nobody uses.
+
+### Fixed
+
+- **`deltix push hmc-sync` / `deltix log foo` / etc. failed with
+  "No local data directory found"** even though the project was set up
+  via `deltix init` and the data was there. `resolveServerIdentity()`
+  dropped the project's `projectRoot` when a repo was given explicitly
+  on the command line, so the local data dir resolved under the legacy
+  `~/.deltix/repos/<repo>` path instead of the project's
+  `~/.deltix/projects/<hash>/<repo>` path. Threaded through. Falls back
+  to repo-only when there's no project at cwd or the project is bound
+  to a different repo.
+
 ## [0.7.10] - 2026-08-31
 
 **In plain terms:** your session no longer expires on you mid-flow.
