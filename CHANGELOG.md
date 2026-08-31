@@ -9,6 +9,28 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.7.9] - 2026-08-31
+
+**In plain terms:** when `deltix import` hits a row that violates a
+NOT NULL / type constraint in your source DB, it used to abort the whole
+table. Now you can pass `--continue` to skip the bad row and import
+everything else.
+
+### Added
+
+- **`deltix import --continue`.** Forwards to `dolt table import
+  --continue`: a row that violates a constraint (e.g. NULL in a
+  NOT NULL column, type coercion failure) is skipped instead of
+  aborting the import. Useful when the source DB has a handful of bad
+  rows that you'd rather skip than fix one-by-one before importing.
+  Once the import completes, the operator still gets the regular
+  `dolt table import` summary telling them how many rows were skipped,
+  so they can clean the source at their leisure.
+
+### Fixed
+
+- (`v0.7.8`) `deltix import` JSON columns: see prior release.
+
 ## [0.7.8] - 2026-08-31
 
 **In plain terms:** importing a MySQL/MariaDB table that had a JSON column

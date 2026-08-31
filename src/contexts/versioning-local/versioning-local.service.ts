@@ -390,6 +390,7 @@ export class VersioningLocalService {
   async bulkImportTables(
     id: LocalServerIdentity,
     tables: { name: string; schema: string; csv: string; base64Columns: string[] }[],
+    options: { continueOnRowError?: boolean } = {},
   ): Promise<void> {
     const dataDir = computeLocalDataDir(this.deps.homeDir, id);
     // Import is the "git init" moment: the local repo may not exist yet, so
@@ -419,11 +420,12 @@ export class VersioningLocalService {
         );
         await writeFile(tmp, table.csv);
         try {
-          const imp = await runDoltCommand(
-            binaryPath,
-            ['--data-dir', dataDir, 'table', 'import', '-r', table.name, tmp],
-            { timeoutMs: 120_000 },
-          );
+          const importArgs: string[] = ['--data-dir', dataDir, 'table', 'import', '-r'];
+          if (options.continueOnRowError) {
+            importArgs.push('--continue');
+          }
+          importArgs.push(table.name, tmp);
+          const imp = await runDoltCommand(binaryPath, importArgs, { timeoutMs: 120_000 });
           if (imp.exitCode !== 0) {
             throw new PushError(`import ${table.name}`, imp.stderr.trim() || imp.stdout.trim());
           }

@@ -434,7 +434,7 @@ async function runImport(args: string[]): Promise<number> {
   const from = flagValue(args, 'from') ?? process.env.DELTIX_IMPORT_URL;
   if (!repoArg || !from) {
     printError(
-      'Usage: deltix import <repo> --from <mysql://dsn> [--table t] [--schema-only] [--no-commit] [--blobs error|base64|skip]',
+      'Usage: deltix import <repo> --from <mysql://dsn> [--table t] [--schema-only] [--continue] [--no-commit] [--blobs error|base64|skip]',
     );
     return 1;
   }
@@ -443,6 +443,8 @@ async function runImport(args: string[]): Promise<number> {
     blobsRaw === 'base64' || blobsRaw === 'skip' || blobsRaw === 'error' ? blobsRaw : 'error'
   ) as BlobPolicy;
   const schemaOnly = args.includes('--schema-only');
+  const continueOnRowError =
+    args.includes('--continue') || args.includes('--continue-on-row-error');
 
   // When the operator didn't pick a mode AND the terminal is interactive,
   // ask once with a sensible default (schema + data, the common case). In
@@ -477,6 +479,7 @@ async function runImport(args: string[]): Promise<number> {
       from: dsnWithPromptedSecret,
       tables: flagMulti(args, 'table'),
       schemaOnly: effectiveSchemaOnly,
+      continueOnRowError,
       noCommit: args.includes('--no-commit'),
       blobs,
     });
