@@ -538,8 +538,31 @@ async function maybePromptForDsnPassword(dsn: string): Promise<string> {
   return parsed.toString();
 }
 
+/**
+ * Reads a CLI flag value in any of the three POSIX-style forms:
+ *   `--limit=5`   (long, equals-separated)
+ *   `--limit 5`   (long, space-separated)
+ *   `-n 5`        (short, space-separated)
+ * The short form requires a separate value (the next arg) so that
+ * `-n5` is not mis-parsed — operators almost always space it. Returns
+ * `undefined` if the flag isn't present.
+ *
+ * Only long flags accept the `--flag=value` form (short flags can't
+ * practically be `--n=5`, and supporting it would invite ambiguity).
+ */
 function parseFlagValue(args: string[], flagName: string): string | undefined {
-  return args.find((arg) => arg.startsWith(`--${flagName}=`))?.slice(flagName.length + 3);
+  // Long form: --name=value
+  const eq = args.find((a) => a.startsWith(`--${flagName}=`));
+  if (eq) return eq.slice(flagName.length + 3);
+  // Long form: --name value
+  const li = args.indexOf(`--${flagName}`);
+  if (li >= 0 && li + 1 < args.length) return args[li + 1];
+  // Short form: -x value (single-char name)
+  if (flagName.length === 1) {
+    const si = args.indexOf(`-${flagName}`);
+    if (si >= 0 && si + 1 < args.length) return args[si + 1];
+  }
+  return undefined;
 }
 
 function normalizeTables(args: string[]): string[] | null {
@@ -806,8 +829,12 @@ async function runDiff(args: string[]): Promise<number> {
 
   try {
     const diff = await createVersioningService().getDiff(repo, from, to);
+    // Server returns `{ fromRef, toRef, tables: [...] }`. The row table is
+    // `diff.tables`, not `diff` itself — passing `diff` directly (and casting
+    // away the type) was the source of the `rows.reduce is not a function` bug
+    // when this command hit a real server response.
     printKeyValues({ repo, from, to });
-    printTable(diff as unknown as Array<Record<string, unknown>>);
+    printTable(diff.tables as unknown as Array<Record<string, unknown>>);
     return 0;
   } catch (err) {
     return handleVersioningError(err, 'Diff failed');
@@ -1494,4 +1521,4 @@ if (import.meta.main) {
   process.exit(exitCode);
 }
 
-export { persistLocalPortIfExplicit };
+export { parseFlagValue, persistLocalPortIfExplicit };

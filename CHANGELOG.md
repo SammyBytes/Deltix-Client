@@ -9,6 +9,38 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.7.17] - 2026-08-31
+
+**In plain terms:** three small fixes reported by the same operator in one
+debug session. The Windows users got a one-liner installer that matches
+the bash experience.
+
+### Fixed
+
+- **`deltix diff` crashed with `TypeError: rows.reduce is not a function`**
+  on every call. The server returns `{ fromRef, toRef, tables: [...] }`;
+  the CLI passed `diff` directly to `printTable`, which then called
+  `.reduce()` on an object. Now passes `diff.tables`.
+- **`deltix log -n 5` mis-parsed `-n` as the repo name.** The flag
+  helper `parseFlagValue` only matched `--name=value`, not the space-
+  separated forms (`--name value`, `-n 5`). Rewrote it to accept all
+  three; `-n 5` and `--branch main` and `--limit=5` all work now.
+  `flagValue` for `--password=` and `--from=` already supported the
+  space-separated forms; brought everything into one consistent helper.
+  Added 7 unit tests covering all three forms.
+
+### Added
+
+- **Windows installer: `scripts/get-deltix-client.ps1`.** The PowerShell
+  equivalent of the bash installer: detects AMD64/ARM64, downloads the
+  matching asset, SHA-256-verifies against the GitHub-published digest
+  (via `Get-FileHash`), and installs to `$HOME\.local\bin\deltix.exe`
+  (or `C:\Program Files\Deltix` with `-System`, which auto-elevates via
+  `runas`). Honors the same `VERSION=` and `INSTALL_DIR=` env vars as the
+  bash script. The README's Windows section now shows this as the
+  recommended path ahead of Scoop, and the script itself ships with full
+  PowerShell comment-based help (`Get-Help .\get-deltix-client.ps1`).
+
 ## [0.7.16] - 2026-08-31
 
 **In plain terms:** the help text now tells you `[<repo>]` is optional
