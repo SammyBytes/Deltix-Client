@@ -9,6 +9,26 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.7.5] - 2026-08-31
+
+**In plain terms:** two UX/security wins for `deltix import`. The CLI now
+prompts for your database password with the input hidden (never echoed),
+and asks interactively whether you want schema+data or schema only — with
+a sensible default, no flag to remember.
+
+### Added
+
+- **`deltix import` prompts for the DB password with masked input.** When
+  the `--from` DSN has a user but no password (e.g.
+  `mysql://root@127.0.0.1/db`), the CLI now asks for it via a masked
+  TTY prompt — no more pasting the secret in plaintext, no more entries
+  in shell history or `ps`. The password stays out of the DSN string.
+  Falls back to a non-masked warning if stdin isn't a TTY (CI/piped).
+- **Interactive "schema + data?" prompt.** When you don't pass
+  `--schema-only` AND the terminal is interactive, the CLI asks once
+  with the default "schema + data". In scripts / CI it stays silent and
+  defaults to schema + data, so the command stays batchable.
+
 ## [0.7.4] - 2026-08-31
 
 **In plain terms:** the validation loop is now fully green.

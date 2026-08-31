@@ -402,6 +402,24 @@ async function runImport(args: string[]): Promise<number> {
   const blobs = (
     blobsRaw === 'base64' || blobsRaw === 'skip' || blobsRaw === 'error' ? blobsRaw : 'error'
   ) as BlobPolicy;
+  const schemaOnly = args.includes('--schema-only');
+
+  // When the operator didn't pick a mode AND the terminal is interactive,
+  // ask once with a sensible default (schema + data, the common case). In
+  // non-TTY (CI, scripts) we silently default to schema + data so the
+  // command stays batchable.
+  let effectiveSchemaOnly = schemaOnly;
+  if (!schemaOnly && process.stdin.isTTY) {
+    const wantsData = await promptConfirm('Import schema AND data? (no = schema only)', {
+      default: true,
+    });
+    if (!wantsData) effectiveSchemaOnly = true;
+  }
+
+  // Auto-prompt for the DB password when the DSN didn't carry one. Keeping
+  // the secret out of the DSN (and therefore out of shell history and `ps`)
+  // is the whole point.
+  const dsnWithPromptedSecret = await maybePromptForDsnPassword(from);
   try {
     // Bind the folder to the repo (the "git init" moment); reuse if already bound.
     let project: ResolvedProject;
@@ -416,9 +434,9 @@ async function runImport(args: string[]): Promise<number> {
     }
     const identity = { repo: project.config.repo, projectRoot: project.root };
     const result = await createImportService().import(identity, {
-      from,
+      from: dsnWithPromptedSecret,
       tables: flagMulti(args, 'table'),
-      schemaOnly: args.includes('--schema-only'),
+      schemaOnly: effectiveSchemaOnly,
       noCommit: args.includes('--no-commit'),
       blobs,
     });
@@ -447,6 +465,30 @@ async function runImport(args: string[]): Promise<number> {
     printError(`Import failed: ${String(err)}`);
     return 1;
   }
+}
+
+/**
+ * If `dsn` parses and has no password (e.g. `mysql://root@host/db`), ask
+ * for it interactively with a masked prompt and return the DSN with the
+ * password filled in. If the DSN already carries a password, or the
+ * operator hits Enter on the prompt (empty secret), return the input as-is.
+ *
+ * Non-TTY: skip the prompt silently — the operator is presumably scripting.
+ */
+async function maybePromptForDsnPassword(dsn: string): Promise<string> {
+  if (!process.stdin.isTTY) return dsn;
+  let parsed: URL;
+  try {
+    parsed = new URL(dsn);
+  } catch {
+    return dsn; // let the import service emit the proper DsnError later
+  }
+  if (parsed.password) return dsn;
+  if (!parsed.username) return dsn;
+  const secret = await promptSecret(`Password for ${parsed.username}@${parsed.hostname}`);
+  if (secret === '') return dsn;
+  parsed.password = secret;
+  return parsed.toString();
 }
 
 function parseFlagValue(args: string[], flagName: string): string | undefined {

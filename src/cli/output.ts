@@ -92,6 +92,78 @@ export async function promptText(
   return trimmed !== '' ? trimmed : (opts.default ?? '');
 }
 
+/**
+ * Reads a line of input without echoing it to the terminal, used for secrets
+ * like database passwords. Falls back to plain readline when stdin is not a
+ * TTY (piped input / CI) — in that case the secret WILL be visible in the
+ * operator's terminal, but we surface a clear warning so it's never silent.
+ */
+export async function promptSecret(message: string): Promise<string> {
+  const input = process.stdin;
+  const output = process.stdout;
+  output.write(`${message}: `);
+
+  // Non-TTY fallback (piped input, CI, captured TTY): no way to mask.
+  // Warn once so the operator knows their secret is in cleartext locally,
+  // but still accept the line so scripted usage keeps working.
+  if (!input.isTTY) {
+    output.write('(warning: non-interactive terminal, input will be visible) ');
+    return await rawPrompt('');
+  }
+
+  return await new Promise((resolve) => {
+    let buffer = '';
+    let settled = false;
+
+    const finish = (value: string) => {
+      if (settled) return;
+      settled = true;
+      input.setRawMode(false);
+      input.pause();
+      input.off('data', onData);
+      input.off('error', onError);
+      output.off('error', onError);
+      output.write('\n');
+      resolve(value);
+    };
+
+    const onData = (chunk: Buffer) => {
+      for (let i = 0; i < chunk.length; i++) {
+        const byte = chunk[i] ?? 0;
+        if (byte === 0x0d || byte === 0x0a) {
+          finish(buffer);
+          return;
+        }
+        if (byte === 0x03) {
+          // Ctrl+C — exit cleanly so we never silently keep going with an
+          // incomplete secret.
+          finish('');
+          process.exit(1);
+          return;
+        }
+        if (byte === 0x7f || byte === 0x08) {
+          if (buffer.length > 0) {
+            buffer = buffer.slice(0, -1);
+            output.write('\b \b');
+          }
+          continue;
+        }
+        if (byte < 0x20) continue; // other control chars (arrows, esc, ...)
+        buffer += String.fromCharCode(byte);
+        output.write('*');
+      }
+    };
+
+    const onError = () => finish(buffer);
+
+    input.setRawMode(true);
+    input.resume();
+    input.on('data', onData);
+    input.on('error', onError);
+    output.on('error', onError);
+  });
+}
+
 /** Prompts the user for a yes/no confirmation (e.g. trusting a fetched certificate). */
 export async function promptConfirm(
   message: string,
