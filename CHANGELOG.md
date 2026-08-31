@@ -9,6 +9,32 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.7.16] - 2026-08-31
+
+**In plain terms:** the help text now tells you `[<repo>]` is optional
+when you're inside a `deltix init`-ed working tree, and `deltix version`
+finally shows the server version (the probe now passes TLS options).
+
+### Fixed
+
+- **`deltix version` reported "server version probe unavailable"** on TLS
+  servers with self-signed certs even though `push`, `log`, and every
+  data command worked fine. The probe path used a raw `fetch()` without
+  passing the CA cert / SNI override that the data API threads through.
+  Now uses the same `buildFetchTlsOptions(...)` helper, so the probe
+  succeeds against the same TLS server as everything else.
+
+### Changed
+
+- **Help text now shows optionality.** The `deltix` top-level help
+  switched `<repo>` to `[<repo>]` for every command that autodetects
+  via v0.7.14's `resolveRepo` (repo get, branch list/create/checkout/
+  delete/current, merge, diff, roles, sync-prefs). All `[--flag]`
+  patterns unified to `[--flag=value|-f value]` so the short forms
+  shipped in v0.7.13 are discoverable. New top-level note: "When run
+  from a `deltix init`-ed working tree, [<repo>] becomes optional —
+  the cwd project wins."
+
 ## [0.7.15] - 2026-08-31
 
 **In plain terms:** two small operator-pain reductions reported in one
