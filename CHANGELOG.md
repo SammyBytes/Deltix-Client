@@ -9,6 +9,21 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.7.7] - 2026-08-31
+
+**In plain terms:** v0.7.6 shipped with a bug: `deltix login <username>`
+(no password) crashed with `ReferenceError: promptSecret is not defined`
+because the import was missing. Fixed.
+
+### Fixed
+
+- **`deltix login <username>` (no password) crashed with
+  `ReferenceError: promptSecret is not defined`.** The new masked-prompt
+  helper added in v0.7.6 was used in `runLogin` but never added to the
+  named-import block at the top of `src/cli/index.ts`. Bun's tree-shaker
+  only catches this at runtime, so the unit tests didn't catch it.
+  Fixed by adding `promptSecret` to the import list.
+
 ## [0.7.6] - 2026-08-31
 
 **In plain terms:** `deltix login` no longer needs your password on the

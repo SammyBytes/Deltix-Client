@@ -74,6 +74,7 @@ import {
   printSuccess,
   printTable,
   promptConfirm,
+  promptSecret,
   promptText,
 } from './output';
 
