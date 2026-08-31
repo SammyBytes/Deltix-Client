@@ -9,6 +9,42 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.7.18] - 2026-08-31
+
+**In plain terms:** the client no longer talks gRPC, and the operator
+no longer needs env vars for the things `deltix configure` can ask about
+itself.
+
+### Changed
+
+- **`deltix configure` covers everything the operator needs.** The
+  wizard now prompts for the local Dolt SQL bind host AND port (default
+  `127.0.0.1:3306`) in addition to the server URL and TLS, and
+  persists both to `~/.deltix/config.json`. The previously required
+  `DELTIX_LOCAL_PORT=...` manual export on every `deltix start` is now
+  a one-time wizard answer.
+- **Env vars are now CI / automation only.** Every connection-related
+  setting (`DELTIX_SERVER_URL`, `DELTIX_HTTP_TLS_CA_PATH`,
+  `DELTIX_HTTP_TLS_SERVER_NAME_OVERRIDE`, `DELTIX_LOCAL_HOST`,
+  `DELTIX_LOCAL_PORT`, `DELTIX_DOLT_BIN_PATH`) has a corresponding
+  field in `~/.deltix/config.json` that `deltix configure` writes. Env
+  vars still take precedence (for CI), but the human-facing flow is
+  now command-driven, not env-driven.
+
+### Removed
+
+- **gRPC transfer pipeline.** The client never used gRPC for data-plane
+  traffic — that was a legacy Fase 3 path behind
+  `DELTIX_ENABLE_GRPC_TRANSFER`. The client is now REST-only: the entire
+  `dataflow/` and `heartbeat/` bounded contexts, the
+  `acl/grpc-transfer-client.ts` and `acl/transfer-ticket-api-adapter.ts`
+  adapters, the `DELTIX_GRPC_*` and `DELTIX_HEARTBEAT_*` env vars, the
+  `grpcHost` / `grpcPort` / `grpcTlsCaPath` / `grpcTlsServerNameOverride`
+  fields on `StoredConfig`, the `@grpc/grpc-js` and `@grpc/proto-loader`
+  dependencies, and the associated tests are all gone. The
+  commit-based REST push/pull path (Fase 5.9) is the only path left,
+  which was already the recommended one.
+
 ## [0.7.17] - 2026-08-31
 
 **In plain terms:** three small fixes reported by the same operator in one

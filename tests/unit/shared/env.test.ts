@@ -62,23 +62,25 @@ describe('shared/env', () => {
     it('fills Bun.env from persisted config when unset', () => {
       applyPersistedConfigDefaults({
         serverUrl: 'https://10.1.10.129:9090',
-        grpcHost: '10.1.10.129',
-        grpcPort: 50051,
-        grpcTlsServerNameOverride: 'localhost',
+        httpTlsCaPath: '/etc/deltix/server.crt',
+        httpTlsServerNameOverride: 'hbs-svr-pulse',
+        localHost: '127.0.0.1',
+        localPort: 3307,
       });
 
       expect(Bun.env.DELTIX_SERVER_URL).toBe('https://10.1.10.129:9090');
-      expect(Bun.env.DELTIX_GRPC_HOST).toBe('10.1.10.129');
-      expect(Bun.env.DELTIX_GRPC_PORT).toBe('50051');
-      expect(Bun.env.DELTIX_GRPC_TLS_SERVER_NAME_OVERRIDE).toBe('localhost');
+      expect(Bun.env.DELTIX_HTTP_TLS_CA_PATH).toBe('/etc/deltix/server.crt');
+      expect(Bun.env.DELTIX_HTTP_TLS_SERVER_NAME_OVERRIDE).toBe('hbs-svr-pulse');
+      expect(Bun.env.DELTIX_LOCAL_HOST).toBe('127.0.0.1');
+      expect(Bun.env.DELTIX_LOCAL_PORT).toBe('3307');
     });
 
     it('never overrides an already-set env var (env vars always win)', () => {
-      Bun.env.DELTIX_GRPC_HOST = 'explicit-host';
+      Bun.env.DELTIX_LOCAL_PORT = '3307';
 
-      applyPersistedConfigDefaults({ grpcHost: 'from-config' });
+      applyPersistedConfigDefaults({ localPort: 9999 });
 
-      expect(Bun.env.DELTIX_GRPC_HOST).toBe('explicit-host');
+      expect(Bun.env.DELTIX_LOCAL_PORT).toBe('3307');
     });
   });
 });

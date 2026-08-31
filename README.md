@@ -187,29 +187,27 @@ deltix push                      # first push ships the imported data
   active operator stays logged in for a week without prompting. Inactivity
   boot is at 7 days.
 - **TLS is always on.** `deltix configure` can fetch and pin the server's
-  self-signed certificate (trust-on-first-use) for both the REST and gRPC
-  endpoints; connecting over a bare IP works without disabling verification.
-  The `/status` probe used by `deltix version` threads the same CA
+  self-signed certificate (trust-on-first-use) for the REST endpoint;
+  connecting over a bare IP works without disabling verification. The
+  `/status` probe used by `deltix version` threads the same CA
   options through, so the probe succeeds whenever data calls do.
-
-> The legacy whole-file gRPC transfer is retained only behind
-> `DELTIX_ENABLE_GRPC_TRANSFER=1` for rollback while the commit-based path is
-> confirmed, and is slated for removal.
 
 ---
 
 ## Configuration
 
-`deltix configure` writes defaults to `~/.deltix/config.json`. Any of these
-environment variables override it:
+`deltix configure` is the human-friendly path and the recommended way
+to set up Deltix-Client — it prompts for the server URL, the local Dolt
+SQL port, and TLS options, and persists the result to
+`~/.deltix/config.json`. Env vars below are for CI / automation only;
+`deltix configure` should be enough for every interactive use case.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `DELTIX_SERVER_URL` | `http://127.0.0.1:9090` | REST control plane. |
-| `DELTIX_GRPC_HOST` / `DELTIX_GRPC_PORT` | `127.0.0.1` / `50051` | Transfer engine (pull/legacy). |
-| `DELTIX_HTTP_TLS_CA_PATH` / `DELTIX_GRPC_TLS_CA_PATH` | — | CA to trust a self-signed server. |
-| `DELTIX_HTTP_TLS_SERVER_NAME_OVERRIDE` / `DELTIX_GRPC_TLS_SERVER_NAME_OVERRIDE` | — | SNI name when connecting by IP. |
-| `DELTIX_LOCAL_HOST` / `DELTIX_LOCAL_PORT` | `127.0.0.1` / `3306` | Local Dolt SQL server. After the first explicit `DELTIX_LOCAL_PORT`, the value is persisted and you no longer need to export it. |
+| `DELTIX_SERVER_URL` | `http://127.0.0.1:9090` | REST control plane. Persisted via `deltix configure`. |
+| `DELTIX_HTTP_TLS_CA_PATH` | — | CA to trust a self-signed server. Persisted via `deltix configure`. |
+| `DELTIX_HTTP_TLS_SERVER_NAME_OVERRIDE` | — | SNI name when connecting by IP. Persisted via `deltix configure`. |
+| `DELTIX_LOCAL_HOST` / `DELTIX_LOCAL_PORT` | `127.0.0.1` / `3306` | Local Dolt SQL server. Both are persisted via `deltix configure`, so a host with a pre-installed MySQL/MariaDB on 3306 only types the new port once. |
 | `DELTIX_HOME` | `~/.deltix` | Root for local state + Dolt binary. |
 | `DELTIX_DOLT_VERSION` / `DELTIX_DOLT_BIN_PATH` | `2.3.1` / — | Pinned Dolt version / preinstalled binary. |
 | `DELTIX_IMPORT_URL` | — | Optional default for `deltix import --from`. |
@@ -234,7 +232,6 @@ A modular monolith organized by **bounded contexts** under `src/contexts/*`
 | `import` | `deltix import` end-to-end: parse DSN, mask password, push masked prompt, schema-only / data-only, `--continue`, blob policies, JSON-column serialisation. |
 | `versioning-local` | Local Dolt operations: commit, push export, pull apply, merge, branches, `origin/*` tracking. Commits are tagged with the logged-in user (sanitised). |
 | `versioning` | REST parity with the server: repos, branches, merge, log/diff, roles, sync-prefs, push/pull-commits. |
-| `dataflow`, `heartbeat` | Legacy gRPC transfer (behind the feature flag). |
 
 Full engineering rules (architecture, security, testing, logging) live in
 [`.github/copilot-instructions.md`](./.github/copilot-instructions.md).

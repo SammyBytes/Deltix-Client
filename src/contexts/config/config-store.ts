@@ -1,9 +1,9 @@
 /**
- * Persists connection settings (server URL, gRPC host/port, TLS trust
- * options) to disk (default: `~/.deltix/config.json`), so a first-time user
+ * Persists connection settings (server URL, TLS trust options, local Dolt
+ * bind) to disk (default: `~/.deltix/config.json`), so a first-time user
  * doesn't have to hand-set env vars to connect to a non-default host —
- * particularly the gRPC TLS options, which previously required knowing
- * about `DELTIX_GRPC_TLS_SERVER_NAME_OVERRIDE` in advance to avoid the
+ * particularly the TLS options, which previously required knowing about
+ * `DELTIX_HTTP_TLS_SERVER_NAME_OVERRIDE` in advance to avoid the
  * `ERR_INVALID_ARG_VALUE` SNI-on-IP-address crash.
  *
  * Values here are only *defaults*: env vars, when explicitly set, always
@@ -15,25 +15,22 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 export interface StoredConfig {
+  /** REST URL of Deltix-Server (e.g. http://server:9090 or https://). */
   serverUrl?: string;
-  grpcHost?: string;
-  grpcPort?: number;
-  grpcTlsCaPath?: string;
-  grpcTlsServerNameOverride?: string;
-  /**
-   * CA cert / SNI override for HTTP (REST) calls. Optional and independent
-   * from the gRPC fields above — set this only when the HTTP control plane
-   * presents a *different* certificate than the gRPC transfer engine. When
-   * omitted, `applyPersistedConfigDefaults()` falls back to the gRPC values,
-   * since both normally share the same self-signed certificate.
-   */
+  /** CA to trust the server's HTTPS certificate against. */
   httpTlsCaPath?: string;
+  /** SNI ServerName when connecting to the server by bare IP address. */
   httpTlsServerNameOverride?: string;
   /**
-   * Port the local `dolt sql-server` (mysql-embedded context) binds to when
-   * `deltix start` launches it. Optional — defaults to 3306, and is only
-   * persisted when `deltix configure` (or manual config editing) sets it,
-   * e.g. to avoid colliding with a pre-installed MySQL service.
+   * Bind address for the local `dolt sql-server` (the mysql-embedded
+   * context). Defaults to 127.0.0.1; persisted via `deltix configure`.
+   */
+  localHost?: string;
+  /**
+   * Port the local `dolt sql-server` binds to when `deltix start` launches
+   * it. Defaults to 3306; persisted via `deltix configure` so a host
+   * with a pre-installed MySQL on 3306 can pick a free port without
+   * exporting env vars by hand.
    */
   localPort?: number;
   /**
