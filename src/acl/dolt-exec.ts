@@ -15,6 +15,7 @@
 
 import { Buffer } from 'node:buffer';
 import { spawn } from 'node:child_process';
+import { openSync } from 'node:fs';
 
 export interface DoltCommandResult {
   stdout: string;
@@ -123,28 +124,55 @@ export async function runDoltOrThrow(
 
 export interface BackgroundProcess {
   pid: number;
-  stderr: import('node:stream').Readable;
+  /**
+   * A live stream of the child's stderr, only available when no
+   * `logFilePath` was supplied. When the output is redirected to a file
+   * this is `null` and the caller should read the file instead.
+   */
+  stderr: import('node:stream').Readable | null;
+  /**
+   * Absolute path to the file that receives the child's combined output,
+   * or `null` when output is exposed via the `stderr` stream.
+   */
+  logFilePath: string | null;
 }
 
 /**
  * Spawns an external executable as a detached background process (for a
- * long-running server like `dolt sql-server`) and returns its PID plus a
- * stderr stream the caller can tail for diagnostics. The child is `unref`'d
- * so it keeps running after this process exits; the caller owns lifecycle
- * management (PID file, `stop`), via `process.kill`.
+ * long-running server like `dolt sql-server`) and returns its PID plus a way
+ * to read its diagnostics. The child is `unref`'d so it keeps running after
+ * this process exits; the caller owns lifecycle management (PID file,
+ * `stop`), via `process.kill`.
+ *
+ * Why a log file? Capturing both stdout and stderr via pipes (`pipe`) looks
+ * tidy, but Node pipes have a finite kernel buffer (~64 KiB) and the child
+ * receives SIGPIPE the moment it overflows. Dolt writes heartbeats to
+ * stdout during normal operation; the moment the buffer fills and the
+ * parent process is no longer actively draining (very common for a one-shot
+ * `start` CLI that exits after `waitForPort`), Dolt is killed and you see
+ * a "lost connection at handshake" right where you expected the server to
+ * stay up. Redirecting both streams to a regular file removes that pressure
+ * entirely and gives operators a post-mortem log to inspect.
  *
  * Same argv-array-only contract as `runCommand` (no shell string).
  */
 export function spawnBackgroundProcess(
   binaryPath: string,
   args: string[],
-  options: { cwd?: string; onExit?: (code: number | null, signal: string | null) => void } = {},
+  options: {
+    cwd?: string;
+    onExit?: (code: number | null, signal: string | null) => void;
+    logFilePath?: string;
+  } = {},
 ): BackgroundProcess {
+  const stdio: ['ignore', 'pipe' | number, 'pipe' | number] = options.logFilePath
+    ? ['ignore', openSync(options.logFilePath, 'a'), openSync(options.logFilePath, 'a')]
+    : ['ignore', 'pipe', 'pipe'];
   const child = spawn(binaryPath, args, {
     cwd: options.cwd,
     env: { ...process.env },
     detached: true,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio,
     windowsHide: true,
   });
   child.unref();
@@ -155,6 +183,7 @@ export function spawnBackgroundProcess(
   }
   return {
     pid: child.pid ?? -1,
-    stderr: child.stderr as import('node:stream').Readable,
+    stderr: options.logFilePath ? null : (child.stderr as import('node:stream').Readable),
+    logFilePath: options.logFilePath ?? null,
   };
 }
