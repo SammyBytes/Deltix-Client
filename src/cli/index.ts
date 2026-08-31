@@ -1206,17 +1206,37 @@ async function runCommit(args: string[]): Promise<number> {
 async function resolveServerIdentity(
   repoArg: string | undefined,
 ): Promise<{ repo: string; projectRoot?: string } | null> {
-  if (repoArg) return { repo: repoArg };
-  try {
-    const project = await createLocalProjectService().resolve(process.cwd());
-    return { repo: project.config.repo, projectRoot: project.root };
-  } catch (err) {
-    if (err instanceof NoProjectError) {
-      printError(String(err.message));
-      return null;
+  // When the repo is given explicitly (e.g. `deltix push hmc-sync`), still
+  // try to thread the cwd's projectRoot through so the local data dir
+  // resolves under <home>/projects/<projectRoot-hash>/<repo> instead of the
+  // legacy <home>/repos/<repo> path. Without this, every command that
+  // accepts a repo arg (push/pull/log/branch/...) loses access to the local
+  // working tree that the project's `deltix init` set up.
+  // Falls through to repo-only when there's no project at cwd OR the
+  // project's bound repo doesn't match.
+  const tryResolveProjectRoot = async (): Promise<{
+    repo: string;
+    projectRoot?: string;
+  } | null> => {
+    try {
+      const project = await createLocalProjectService().resolve(process.cwd());
+      return { repo: project.config.repo, projectRoot: project.root };
+    } catch (err) {
+      if (err instanceof NoProjectError) return null;
+      throw err;
     }
-    throw err;
+  };
+
+  if (repoArg) {
+    const fromProject = await tryResolveProjectRoot();
+    if (fromProject && fromProject.repo === repoArg) {
+      return { repo: repoArg, projectRoot: fromProject.projectRoot };
+    }
+    return { repo: repoArg };
   }
+  const fromProject = await tryResolveProjectRoot();
+  if (!fromProject) return null;
+  return fromProject;
 }
 
 async function runStart(args: string[]): Promise<number> {
