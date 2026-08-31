@@ -9,6 +9,22 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.7.8] - 2026-08-31
+
+**In plain terms:** importing a MySQL/MariaDB table that had a JSON column
+used to fail with `[object Object]` because the client serialized the
+parsed object the wrong way. JSON columns now round-trip correctly.
+
+### Fixed
+
+- **`deltix import` failed on JSON columns with `Invalid JSON text:
+  invalid character 'o' looking for beginning of value` / `cause: ...
+  ACSSystemSettings: [object Object]`.** mysql2 returns MySQL JSON column
+  values as already-parsed JavaScript objects, but `serializeTable()` ran
+  them through `String(value)`, which gives the unhelpful `'[object
+  Object]'`. Fixed: JSON.stringify object values before CSV-encoding,
+  so the document lands in Dolt as the same JSON it had in MySQL.
+
 ## [0.7.7] - 2026-08-31
 
 **In plain terms:** v0.7.6 shipped with a bug: `deltix login <username>`
