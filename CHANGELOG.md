@@ -9,6 +9,21 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.7.10] - 2026-08-31
+
+**In plain terms:** your session no longer expires on you mid-flow.
+Any command that hits a 401 transparently refreshes the access token and
+retries once.
+
+### Added
+
+- **Auto-refresh on 401.** When the server returns 401 (access token
+  expired between the CLI minting it and the server validating it), the
+  versioning API adapter now calls `session.mintAccessToken()` (refresh
+  token exchange), retries the request once with the new token, and only
+  surfaces the auth error if the refresh itself fails. Operators no
+  longer need to re-`deltix login` every 15 minutes.
+
 ## [0.7.9] - 2026-08-31
 
 **In plain terms:** when `deltix import` hits a row that violates a
