@@ -1132,10 +1132,33 @@ async function runStart(args: string[]): Promise<number> {
       pid: state.pid,
       dataDir: state.dataDir,
     });
+    // Remember the port the operator actually used so they don't have to
+    // set DELTIX_LOCAL_PORT=... on every subsequent command. We only persist
+    // when the env var was explicit — silent persistence of the default
+    // would surprise anyone sharing the config file across hosts (e.g. dotfiles).
+    await persistLocalPortIfExplicit(state.port);
     return 0;
   } catch (err) {
     return handleLocalServerError(err);
   }
+}
+
+/**
+ * Saves `port` to the Deltix config when DELTIX_LOCAL_PORT is currently set
+ * in the process environment (meaning the operator chose it explicitly).
+ * Merges into the existing config so unrelated fields (server URL, TLS,
+ * credentials paths) are preserved. No-op when DELTIX_LOCAL_PORT is unset
+ * OR when the persisted port already matches.
+ */
+async function persistLocalPortIfExplicit(
+  port: number,
+  configPath: string = defaultConfigPath,
+): Promise<void> {
+  if (Bun.env.DELTIX_LOCAL_PORT === undefined) return;
+  const store = new ConfigStore(configPath);
+  const existing = (await store.load()) ?? {};
+  if (existing.localPort === port) return;
+  await store.save({ ...existing, localPort: port });
 }
 
 async function runStop(args: string[]): Promise<number> {
@@ -1284,3 +1307,5 @@ if (import.meta.main) {
   const exitCode = await runCli(process.argv.slice(2));
   process.exit(exitCode);
 }
+
+export { persistLocalPortIfExplicit };
