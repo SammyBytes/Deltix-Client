@@ -9,6 +9,31 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.7.14] - 2026-08-31
+
+**In plain terms:** every command that takes a `<repo>` argument now
+optionally falls back to the cwd project's `repo =` from `.deltix/config.toml`,
+so you only need to type the repo name when you're outside a project
+context or want to operate on a different repo than the one bound at
+cwd.
+
+### Changed
+
+- **All data-context commands auto-detect repo from cwd when no arg is
+  given.** `deltix merge`, `deltix diff`, `deltix roles`, `deltix branch
+  list|create|checkout|delete|current`, `deltix sync-prefs get|set`,
+  and `deltix repo get` all use the new `resolveRepo()` helper, which
+  mirrors `resolveServerIdentity` (which already powered `push`, `log`,
+  and `branch local` via v0.7.11). When you're inside a `deltix init`ed
+  working tree, `<repo>` becomes optional. Falls back to the historical
+  hard-error UX only when there's no cwd project AND no arg is given.
+
+### Removed
+
+- The internal `requireRepo` / `requireRepoAndName` helpers (which
+  hard-errored on missing args) — replaced by the async `resolveRepo` /
+  `resolveRepoAndName` that try the cwd project first.
+
 ## [0.7.13] - 2026-08-31
 
 **In plain terms:** three small UX bugs from the same session squashed in
