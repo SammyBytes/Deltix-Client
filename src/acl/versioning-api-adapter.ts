@@ -125,6 +125,17 @@ export type MergeResult =
     };
 
 export class VersioningApiAdapter {
+  /**
+   * Called when the server returns 401. Should mint a fresh access token
+   * (refresh-token exchange) and return it. The adapter retries the original
+   * request once with that token before propagating the auth error. Set this
+   * to a no-op (the default) when the caller doesn't support refresh, or to
+   * `() => session.mintAccessToken()` for the live CLI path.
+   */
+  onAuthError: () => Promise<string> = async () => {
+    throw new VersioningAuthenticationError();
+  };
+
   constructor(
     private readonly serverUrl: string,
     private readonly tlsConfig: HttpTlsConfig = {},
@@ -490,6 +501,29 @@ export class VersioningApiAdapter {
   }
 
   private async request(
+    path: string,
+    accessToken: string,
+    options: { method: 'GET' | 'POST' | 'PUT' | 'DELETE'; body?: unknown },
+  ): Promise<Response> {
+    let res = await this.rawFetch(path, accessToken, options);
+    // Auto-refresh once on 401: the access token may have expired between the
+    // CLI minting it and the server validating it. A single refresh-then-retry
+    // is the right middle ground — without it, every long-running session
+    // would have to be re-logged-in every 15 minutes; with infinite retries
+    // we'd mask real auth failures behind a token-rotation loop.
+    if (res.status === 401) {
+      try {
+        const refreshed = await this.onAuthError();
+        res = await this.rawFetch(path, refreshed, options);
+      } catch {
+        // refresh itself failed (no session, network, etc.); fall through
+        // and let throwIfCommonErrors surface the original 401.
+      }
+    }
+    return res;
+  }
+
+  private async rawFetch(
     path: string,
     accessToken: string,
     options: { method: 'GET' | 'POST' | 'PUT' | 'DELETE'; body?: unknown },
