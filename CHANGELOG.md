@@ -9,6 +9,26 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.7.4] - 2026-08-31
+
+**In plain terms:** the validation loop is now fully green.
+`deltix log` (with or without a repo argument) prints the commit history as
+a clean table, no more "rows.reduce is not a function" crash.
+
+### Fixed
+
+- **`deltix log` crashed every time with `rows.reduce is not a function`.**
+  The server returns `{ log: { commits: [...], limit } }`; the client was
+  passing the wrapper object to the table printer instead of the array
+  inside. Now it prints the commit history correctly.
+- **`deltix log` (no repo argument) printed a usage error** even from
+  inside an initialised working tree, while `deltix push` already
+  auto-resolves the repo from the cwd. `log` now does the same.
+
+### Tests
+
+- 133 unit tests pass; lint clean.
+
 ## [0.7.3] - 2026-08-31
 
 **In plain terms:** you no longer have to type `DELTIX_LOCAL_PORT=3307`
