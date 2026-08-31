@@ -9,6 +9,32 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.7.2] - 2026-08-31
+
+**In plain terms:** another bug found while trying the local engine for real
+on a fresh machine: right after `deltix start` reported success, the local
+Dolt would die the moment you tried to connect to it ("Lost connection at
+handshake"). The engine was not broken - it was being killed by the operating
+system because the way `deltix start` launched it filled up an invisible
+buffer. The fix makes `deltix start` write the server output to a log file
+(the way shells normally do), which removes that pressure and gives
+operators a post-mortem log to inspect.
+
+### Fixed
+
+- `deltix start` then mysql-connect immediately: `Lost connection at
+  handshake`. The local Dolt was killed by SIGPIPE a moment after
+  `deltix start` reported ready. Root cause: `spawnBackgroundProcess` wrapped
+  the child stdout in a Node pipe that nothing was draining (we only exposed
+  stderr); the ~64 KiB buffer filled, Dolt got SIGPIPE on its next periodic
+  stdout write, and the listener closed mid-handshake. Fix: redirect both
+  stdout and stderr to `<DELTIX_HOME>/run/<repo>.sql-server.log` (opened with
+  O_APPEND) and pre-create the run/ directory before spawn.
+
+### Tests
+
+- 129 unit tests pass (1 new: log path wired up and run/ pre-created).
+
 ## [0.7.1] - 2026-08-30
 
 **In plain terms:** two fixes found while installing Deltix on a machine that
