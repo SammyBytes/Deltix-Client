@@ -1,6 +1,6 @@
 {
   "name": "deltix-client",
-  "version": "0.7.20",
+  "version": "0.7.21",
   "private": true,
   "license": "MIT",
   "type": "module",

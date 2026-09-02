@@ -1493,9 +1493,14 @@ async function runStatus(args: string[]): Promise<number> {
     // for the "ORM writes to Dolt" workflow. The app points to :3307, migrations
     // land in Dolt's working tree, and `deltix status` tells the operator what
     // changed without needing to re-import.
+    // Fast path: when the server is running, query via MySQL wire protocol
+    // (~50ms) instead of spawning two `dolt` CLI processes (~6s on Windows).
     try {
       const local = await newLocalService();
-      const ws = await local.getStatus(identity);
+      const ws = await local.getStatus(identity, {
+        host: '127.0.0.1',
+        port: status.port,
+      });
       if (ws.branch) {
         printInfo(`On branch ${ws.branch}`);
       }

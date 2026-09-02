@@ -48,6 +48,7 @@ export interface BinaryManagerDeps {
 
 export class BinaryManager {
   private readonly homeDir: string;
+  private cachedPath: string | null = null;
 
   constructor(private readonly deps: BinaryManagerDeps = {}) {
     const env = loadEnv();
@@ -66,8 +67,19 @@ export class BinaryManager {
     const env = loadEnv();
     if (env.DELTIX_DOLT_BIN_PATH) return env.DELTIX_DOLT_BIN_PATH;
 
+    // Cache the PATH lookup (spawns `which` + `dolt --version`, ~100ms)
+    // but not the installed-binary digest check — that must re-verify the
+    // on-disk file every call so tampering is detected.
+    if (this.cachedPath) {
+      if (existsSync(this.cachedPath)) return this.cachedPath;
+      this.cachedPath = null;
+    }
+
     const onPath = await findOnPath(env.DELTIX_DOLT_VERSION);
-    if (onPath !== null) return onPath;
+    if (onPath !== null) {
+      this.cachedPath = onPath;
+      return onPath;
+    }
 
     const installed = await this.findInstalled(env.DELTIX_DOLT_VERSION);
     if (installed !== null) return installed;
