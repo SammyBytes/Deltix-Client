@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runDoltCommand } from '../../acl/dolt-exec';
@@ -283,9 +283,11 @@ export class VersioningLocalService {
     id: LocalServerIdentity,
     opts: { host?: string; port?: number } = {},
   ): Promise<LocalStatus> {
-    const dataDir = computeLocalDataDir(this.deps.homeDir, id);
+    let dataDir = computeLocalDataDir(this.deps.homeDir, id);
     if (!existsSync(dataDir)) {
-      throw new CommitDataDirNotFoundError(id.repo);
+      const fallback = await this.findDataDirForRepo(id.repo);
+      if (fallback) dataDir = fallback;
+      else throw new CommitDataDirNotFoundError(id.repo);
     }
 
     // Fast path: try MySQL wire protocol when we know where the server is.
@@ -926,9 +928,11 @@ export class VersioningLocalService {
     id: LocalServerIdentity,
     table?: string,
   ): Promise<{ tables: string[]; raw: string }> {
-    const dataDir = computeLocalDataDir(this.deps.homeDir, id);
+    let dataDir = computeLocalDataDir(this.deps.homeDir, id);
     if (!existsSync(dataDir)) {
-      throw new CommitDataDirNotFoundError(id.repo);
+      const fallback = await this.findDataDirForRepo(id.repo);
+      if (fallback) dataDir = fallback;
+      else throw new CommitDataDirNotFoundError(id.repo);
     }
     const binaryPath = await this.deps.binaryManager.ensureInstalled();
     await this.ensureLocalRepo(binaryPath, dataDir, id.repo);
@@ -949,5 +953,27 @@ export class VersioningLocalService {
       .map((l) => l.split(/\s+/)[0] ?? '')
       .filter(Boolean);
     return { tables, raw };
+  }
+
+  private async findDataDirForRepo(repo: string): Promise<string | null> {
+    // Scan for any data dir keyed by this repo, regardless of project hash.
+    const candidates: string[] = [];
+    // Legacy: ~/.deltix/repos/<repo>
+    candidates.push(join(this.deps.homeDir, 'repos', repo));
+    try {
+      const projects = await readdir(join(this.deps.homeDir, 'projects'));
+      for (const hash of projects) {
+        candidates.push(join(this.deps.homeDir, 'projects', hash, repo));
+      }
+    } catch {
+      // no projects dir
+    }
+    for (const p of candidates) {
+      if (existsSync(p) && existsSync(join(p, '.dolt'))) return p;
+    }
+    for (const p of candidates) {
+      if (existsSync(p)) return p;
+    }
+    return null;
   }
 }
