@@ -174,10 +174,16 @@ export class MysqlEmbeddedService {
       if (existing) return existing;
       // Orphaned: status found a live MySQL on the port serving this DB
       // (pid -1) but no run file — adopt it instead of failing with
-      // "Port already in use". Recreate the file so future status/stop work.
+      // "Port already in use". Try to discover the real PID so future
+      // status/stop can use `kill(pid,0)` instead of port probing.
+      let pid = (running as unknown as { pid: number }).pid ?? -1;
+      if (pid === -1) {
+        const found = await this.findPidByPort(this.localHost, this.localPort).catch(() => null);
+        if (found) pid = found;
+      }
       const adopted: RunState = {
         repo: id.repo,
-        pid: (running as unknown as { pid: number }).pid ?? -1,
+        pid,
         port: running.port!,
         dataDir: running.dataDir,
         startedAt: Date.now(),
@@ -363,10 +369,34 @@ export class MysqlEmbeddedService {
     }
 
     let alive = true;
-    try {
-      process.kill(state.pid, 0);
-    } catch {
-      alive = false;
+    if (state.pid === -1) {
+      // Adopted orphan has no recorded PID — check liveness via the port
+      // and MySQL wire protocol instead of `kill(-1)` which always throws.
+      if (await this.probePort(this.localHost, this.localPort)) {
+        try {
+          const mysql = await import('mysql2/promise');
+          const conn = await mysql.createConnection({
+            host: this.localHost,
+            port: this.localPort,
+            user: 'root',
+            database: id.repo,
+            connectTimeout: 1200,
+          });
+          await conn.query('SELECT 1');
+          await conn.end();
+          alive = true;
+        } catch {
+          alive = false;
+        }
+      } else {
+        alive = false;
+      }
+    } else {
+      try {
+        process.kill(state.pid, 0);
+      } catch {
+        alive = false;
+      }
     }
 
     if (!alive) {
