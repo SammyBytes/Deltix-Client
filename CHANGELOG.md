@@ -9,6 +9,19 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.7.20] - 2026-08-31
+
+**In plain terms:** `deltix status` now shows what changed (like `git status`), `deltix diff` works locally without server roundtrip, and `deltix repo list` no longer dumps JSON.
+
+### Added
+
+- **`deltix status` now shows staged vs unstaged tables (Git-like).** After you point your app/ORM to Dolt on `:3307` and run a migration (`npx prisma migrate dev`, `alembic upgrade head`, `php artisan migrate`), `deltix status` reports `On branch main` plus `Changes not staged for commit:` and `Changes to be committed:` by querying `dolt_status` directly. This is the core of the "Dolt as primary DB" workflow — no more `deltix import` after every migration, just `status` → `commit` → `push`.
+- **`deltix diff` without server refs shows the working-tree diff.** `deltix diff`, `deltix diff <repo>`, and `deltix diff <repo> <table>` run `dolt diff --stat` locally so you can inspect what the app just did before committing. `deltix diff <repo> <from> <to>` remains the server diff (same as before).
+
+### Fixed
+
+- **`deltix repo list` now renders a readable table.** Previously mapped `repos.map(r => ({ repo: r }))` where `r` is a full `RepoSummary` object, so `formatValue` JSON-stringified the entire row into one column. Now flattens to `{ repo: r.repoId, owner: r.createdBy, role: r.role }`. `deltix repo get` also flattens its output instead of dumping `{ repo: { repoId, doltPath, ... } }` as nested JSON.
+
 ## [0.7.19] - 2026-08-31
 
 **In plain terms:** `deltix log` now accepts flags before the repo name

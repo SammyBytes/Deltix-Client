@@ -750,14 +750,26 @@ async function runRepo(args: string[]): Promise<number> {
       }
       case 'list': {
         const repos = await service.listRepos();
-        printTable(repos.map((repo) => ({ repo })));
+        printTable(
+          repos.map((r) => ({
+            repo: r.repoId,
+            owner: r.createdBy,
+            role: r.role ?? '-',
+          })),
+        );
         return 0;
       }
       case 'get': {
         const repo = await resolveRepo(repoArg, 'Usage: deltix repo get <repo>');
         if (!repo) return 1;
         const found = await service.getRepo(repo);
-        printKeyValues({ repo: found });
+        printKeyValues({
+          repo: found.repoId,
+          owner: found.createdBy,
+          role: found.role ?? '-',
+          doltPath: found.doltPath,
+          createdAt: new Date(found.createdAt).toISOString(),
+        });
         return 0;
       }
       default:
@@ -844,6 +856,46 @@ async function runLog(args: string[]): Promise<number> {
 
 async function runDiff(args: string[]): Promise<number> {
   const [repoArg, from, to] = args;
+
+  // Local working-tree diff (Git-like): `deltix diff` / `deltix diff <repo> [table]`
+  // shows what the app/ORM wrote to Dolt via the MySQL wire protocol.
+  // Server diff (existing): `deltix diff <repo> <from> <to>`.
+  if (!from || !to) {
+    // 0 args: cwd project, 1 arg: repo, 2 args: repo + table
+    let identity: { repo: string; projectRoot?: string } | null = null;
+    let table: string | undefined;
+    if (args.length === 0) {
+      identity = await resolveServerIdentity(undefined);
+    } else if (args.length === 1) {
+      identity = await resolveServerIdentity(repoArg);
+    } else if (args.length === 2) {
+      identity = await resolveServerIdentity(repoArg);
+      table = from;
+    }
+    if (!identity) {
+      printError(
+        'Usage: deltix diff [<repo> [<from> <to> | <table>]]  (no refs = working-tree diff)',
+      );
+      return 1;
+    }
+    try {
+      const local = await newLocalService();
+      const { raw } = await local.getWorkingDiffSummary(identity, table);
+      if (!raw) {
+        printInfo('No changes in working tree.');
+        return 0;
+      }
+      printInfo(`Working-tree diff for ${identity.repo}${table ? ` / ${table}` : ''}:`);
+      for (const line of raw.split('\n').filter(Boolean)) {
+        printInfo(`  ${line}`);
+      }
+      printInfo('  (unstaged — `deltix status` for overview, `deltix commit -m "msg"` to stage)');
+      return 0;
+    } catch (err) {
+      return handleSyncError(err, 'Diff failed');
+    }
+  }
+
   const repo = await resolveRepo(repoArg, 'Usage: deltix diff <repo> <from> <to>');
   if (!repo || !from || !to) return 1;
 
@@ -1436,6 +1488,44 @@ async function runStatus(args: string[]): Promise<number> {
     } else {
       printInfo(`Local Dolt SQL server is not running for ${identity.repo}`);
     }
+
+    // Git-like working-tree status (staged vs unstaged) — the missing piece
+    // for the "ORM writes to Dolt" workflow. The app points to :3307, migrations
+    // land in Dolt's working tree, and `deltix status` tells the operator what
+    // changed without needing to re-import.
+    try {
+      const local = await newLocalService();
+      const ws = await local.getStatus(identity);
+      if (ws.branch) {
+        printInfo(`On branch ${ws.branch}`);
+      }
+      if (ws.clean) {
+        printInfo('Working tree clean — nothing to commit.');
+        printInfo(
+          'Run a migration against Dolt (:3307) and re-run `deltix status` to see changes.',
+        );
+      } else {
+        if (ws.staged.length > 0) {
+          printInfo('Changes to be committed:');
+          printTable(ws.staged.map((r) => ({ table: r.table, status: r.status })));
+        }
+        if (ws.unstaged.length > 0) {
+          printInfo('Changes not staged for commit:');
+          printTable(ws.unstaged.map((r) => ({ table: r.table, status: r.status })));
+          printInfo('  (use `deltix commit -m "msg" [tables]` to stage and commit)');
+        }
+        // Hint for the "app points to Dolt" workflow
+        if (ws.staged.length === 0 && ws.unstaged.length > 0) {
+          printInfo(
+            '  (all changes are unstaged — `deltix commit` will stage everything with `dolt add -A`)',
+          );
+        }
+      }
+    } catch {
+      // No local repo yet (e.g. before first `deltix init`/`start`) — keep server
+      // status output only, don't fail the command.
+    }
+
     return 0;
   } catch (err) {
     return handleLocalServerError(err);
@@ -1536,7 +1626,7 @@ export async function runCli(argv: string[]): Promise<number> {
         '  deltix branch current [<repo>]',
         '  deltix merge [<repo>] <sourceBranch> [targetBranch]',
         '  deltix log [<repo>] [--branch=name|-b name] [--limit=N|-n N]',
-        '  deltix diff [<repo>] <from> <to>',
+        '  deltix diff [<repo> [<from> <to> | <table>]]  (no refs = working-tree diff)',
         '  deltix roles list [<repo>]',
         '  deltix roles grant [<repo>] <username> <reader|writer|admin>',
         '  deltix roles revoke [<repo>] <username>',
