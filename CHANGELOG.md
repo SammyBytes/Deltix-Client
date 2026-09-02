@@ -9,6 +9,14 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.7.25] - 2026-08-31
+
+**In plain terms:** `deltix status` no longer deletes its own tracking file when the server was adopted with `pid -1`.
+
+### Fixed
+
+- **Adopted orphan with `pid: -1` was immediately considered stale: `status` did `process.kill(-1, 0)` which always throws, so it deleted the file it had just recreated and reported "not running" again, making `deltix start` re-adopt in a loop.** Now `status` checks `pid === -1` via port probe + MySQL `SELECT 1` instead of `kill`, and `start` tries to discover the real PID via `netstat`/`lsof` before writing `pid: -1`. This fixes the 0.7.24 repro where `start` reported `pid: -1` and the next `status` still said "not running".
+
 ## [0.7.24] - 2026-08-31
 
 **In plain terms:** `deltix status` no longer says "not running" when the server is actually alive but its tracking file was deleted, and `deltix start` no longer fails with "Port already in use" in that case.
