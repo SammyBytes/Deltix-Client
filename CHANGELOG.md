@@ -9,6 +9,14 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.7.22] - 2026-08-31
+
+**In plain terms:** Dolt now reports `innodb_version` so MySQL health checks that gate on `>= 8.0.28` pass without changes.
+
+### Added
+
+- **Compatibility shim for `SHOW VARIABLES LIKE 'innodb_version'`.** Dolt does not use InnoDB (it uses NBS) and therefore does not expose `innodb_version` at all; callers that do `SHOW VARIABLES LIKE 'innodb_version'` and check `>= 8.0.28` would otherwise see an empty result set and treat Dolt as incompatible, even though it is intentionally a different engine. On `deltix start`, after the server is ready, the client best-effort mirrors `@@version` into `@@innodb_version` via `SET GLOBAL innodb_version = '<version>'` so the check passes while staying in sync with the running Dolt binary. Failures are swallowed — this is purely a convenience for MySQL-oriented health checks that assume InnoDB.
+
 ## [0.7.21] - 2026-08-31
 
 **In plain terms:** `deltix status` now runs in ~50ms instead of 6 seconds.
