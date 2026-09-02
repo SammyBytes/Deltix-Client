@@ -9,6 +9,14 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.7.21] - 2026-08-31
+
+**In plain terms:** `deltix status` now runs in ~50ms instead of 6 seconds.
+
+### Fixed
+
+- **`deltix status` was spawning the Dolt binary twice sequentially (~3s each on Windows).** Now it (1) caches the binary path lookup, (2) runs `active_branch()` and `dolt_status` in parallel, and (3) when the local SQL server is running (the common case), queries via the MySQL wire protocol with `mysql2` directly — no process spawn at all. Clean tree goes from 6s → ~50ms; with changes, ~100ms.
+
 ## [0.7.20] - 2026-08-31
 
 **In plain terms:** `deltix status` now shows what changed (like `git status`), `deltix diff` works locally without server roundtrip, and `deltix repo list` no longer dumps JSON.

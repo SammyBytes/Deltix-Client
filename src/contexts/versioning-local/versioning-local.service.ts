@@ -272,37 +272,104 @@ export class VersioningLocalService {
    * `dolt_status` (table_name, staged, status) and splits into staged
    * vs unstaged. `dolt status` CLI semantics: staged=false => "Changes not
    * staged for commit", staged=true => "Changes to be committed".
+   *
+   * Fast path: when the local `dolt sql-server` is running (the common
+   * case after `deltix start`), query via the MySQL wire protocol with
+   * `mysql2` — ~50ms instead of spawning two `dolt` CLI processes
+   * sequentially (~3s each on Windows). Falls back to the CLI path when
+   * the server is not running.
    */
-  async getStatus(id: LocalServerIdentity): Promise<LocalStatus> {
+  async getStatus(
+    id: LocalServerIdentity,
+    opts: { host?: string; port?: number } = {},
+  ): Promise<LocalStatus> {
     const dataDir = computeLocalDataDir(this.deps.homeDir, id);
     if (!existsSync(dataDir)) {
       throw new CommitDataDirNotFoundError(id.repo);
     }
+
+    // Fast path: try MySQL wire protocol when we know where the server is.
+    if (opts.port) {
+      try {
+        const fast = await this.getStatusViaMysql(id, opts.host ?? '127.0.0.1', opts.port);
+        if (fast) return fast;
+      } catch {
+        // Fall through to CLI path
+      }
+    }
+
     const binaryPath = await this.deps.binaryManager.ensureInstalled();
     await this.ensureLocalRepo(binaryPath, dataDir, id.repo);
 
-    const branch = await this.readActiveBranch(binaryPath, dataDir);
-
-    let rows: LocalStatusRow[] = [];
-    try {
-      const raw = await this.queryRows(
+    // Parallelize the two spawns — was sequential (6s on Windows) before.
+    const [branch, raw] = await Promise.all([
+      this.readActiveBranch(binaryPath, dataDir).catch(() => null),
+      this.queryRows(
         binaryPath,
         dataDir,
         'SELECT table_name, staged, status FROM dolt_status',
-      );
-      rows = raw.map((r) => ({
-        table: String(r.table_name ?? r.table ?? ''),
-        staged: r.staged === true || r.staged === 1 || String(r.staged) === 'true',
-        status: String(r.status ?? 'modified'),
-      }));
-    } catch {
-      // dolt_status may not exist on very old Dolt or empty repo — treat as clean
-      rows = [];
-    }
+      ).catch(() => [] as Record<string, string>[]),
+    ]);
+
+    const rows: LocalStatusRow[] = (raw as Record<string, string>[]).map((r) => ({
+      table: String(r.table_name ?? r.table ?? ''),
+      staged: r.staged === true || (r.staged as unknown) === 1 || String(r.staged) === 'true',
+      status: String(r.status ?? 'modified'),
+    }));
 
     const staged = rows.filter((r) => r.staged);
     const unstaged = rows.filter((r) => !r.staged);
     return { branch, staged, unstaged, clean: rows.length === 0 };
+  }
+
+  private async getStatusViaMysql(
+    id: LocalServerIdentity,
+    host: string,
+    port: number,
+  ): Promise<LocalStatus | null> {
+    let conn: Awaited<ReturnType<typeof import('mysql2/promise').createConnection>> | null = null;
+    try {
+      const mysql = await import('mysql2/promise');
+      conn = await mysql.createConnection({
+        host,
+        port,
+        user: 'root',
+        database: id.repo,
+        connectTimeout: 1500,
+      });
+      const [branchRows] = await conn.query('SELECT active_branch() AS b');
+      const branch =
+        (branchRows as Array<Record<string, string>>)[0]?.b ??
+        (branchRows as Array<Record<string, string>>)[0]?.B ??
+        null;
+
+      let statusRows: Array<Record<string, unknown>> = [];
+      try {
+        const [rows] = await conn.query('SELECT table_name, staged, status FROM dolt_status');
+        statusRows = rows as Array<Record<string, unknown>>;
+      } catch {
+        statusRows = [];
+      }
+
+      const rows: LocalStatusRow[] = statusRows.map((r) => ({
+        table: String((r.table_name as string) ?? (r.table as string) ?? ''),
+        staged: r.staged === true || r.staged === 1 || String(r.staged) === 'true',
+        status: String((r.status as string) ?? 'modified'),
+      }));
+      const staged = rows.filter((r) => r.staged);
+      const unstaged = rows.filter((r) => !r.staged);
+      return { branch: branch ? String(branch) : null, staged, unstaged, clean: rows.length === 0 };
+    } catch {
+      return null;
+    } finally {
+      if (conn) {
+        try {
+          await conn.end();
+        } catch {
+          // ignore
+        }
+      }
+    }
   }
 
   private async readActiveBranch(binaryPath: string, dataDir: string): Promise<string | null> {
