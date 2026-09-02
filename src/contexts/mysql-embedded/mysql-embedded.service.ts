@@ -172,6 +172,19 @@ export class MysqlEmbeddedService {
         (await this.readState(id)) ??
         (!id.projectRoot ? await this.findAnyStateForRepo(id.repo) : null);
       if (existing) return existing;
+      // Orphaned: status found a live MySQL on the port serving this DB
+      // (pid -1) but no run file — adopt it instead of failing with
+      // "Port already in use". Recreate the file so future status/stop work.
+      const adopted: RunState = {
+        repo: id.repo,
+        pid: (running as unknown as { pid: number }).pid ?? -1,
+        port: running.port!,
+        dataDir: running.dataDir,
+        startedAt: Date.now(),
+        projectRoot: id.projectRoot,
+      };
+      await this.writeState(adopted);
+      return adopted;
     }
 
     // Fail fast if the port is already held by another server (e.g. a system
@@ -268,12 +281,38 @@ export class MysqlEmbeddedService {
   async stop(id: LocalServerIdentity): Promise<{ repo: string; stopped: boolean }> {
     let state = await this.readState(id);
     if (!state && !id.projectRoot) state = await this.findAnyStateForRepo(id.repo);
+    // Orphaned but port-probed running state (pid -1) — status would have
+    // recreated a file, but if stop is called without a file, try port probe
+    if (!state) {
+      const probed = await this.status(id);
+      if (probed.running) {
+        // Adopt the probed state so we can at least clear it
+        state = {
+          repo: id.repo,
+          pid: (probed as unknown as { pid: number }).pid ?? -1,
+          port: probed.port!,
+          dataDir: probed.dataDir,
+          startedAt: Date.now(),
+          projectRoot: id.projectRoot,
+        } as RunState;
+      }
+    }
     if (!state) throw new LocalServerNotRunningError(id.repo);
 
-    try {
-      process.kill(state.pid, 'SIGTERM');
-    } catch {
-      // Process already gone — clean up the stale state and report stopped.
+    if (state.pid !== -1) {
+      try {
+        process.kill(state.pid, 'SIGTERM');
+      } catch {
+        // Process already gone — clean up the stale state and report stopped.
+      }
+    } else {
+      // Orphaned server has no recorded PID — try to find PID by port.
+      const pidByPort = await this.findPidByPort(this.localHost, this.localPort).catch(() => null);
+      if (pidByPort) {
+        try {
+          process.kill(pidByPort, 'SIGTERM');
+        } catch {}
+      }
     }
     // Remove whichever file actually held the state, not just the primary
     const p = this.statePath({ repo: state.repo, projectRoot: state.projectRoot });
@@ -299,6 +338,27 @@ export class MysqlEmbeddedService {
       state = await this.findAnyStateForRepo(id.repo);
     }
     if (!state) {
+      // No run file, but the port may still be held by an orphaned
+      // `dolt sql-server` (e.g. file deleted while process stayed alive).
+      // Probe the port and, if it answers, verify it is actually serving
+      // *this* repo via the MySQL wire protocol before reporting running.
+      if (await this.probePort(this.localHost, this.localPort)) {
+        try {
+          const mysql = await import('mysql2/promise');
+          const conn = await mysql.createConnection({
+            host: this.localHost,
+            port: this.localPort,
+            user: 'root',
+            database: id.repo,
+            connectTimeout: 1200,
+          });
+          await conn.query('SELECT 1');
+          await conn.end();
+          return { repo: id.repo, running: true, port: this.localPort, dataDir, pid: -1 };
+        } catch {
+          // Port belongs to another server or not serving this DB
+        }
+      }
       return { repo: id.repo, running: false, dataDir };
     }
 
@@ -373,6 +433,46 @@ export class MysqlEmbeddedService {
       JSON.stringify(state, null, 2),
       { mode: 0o600 },
     );
+  }
+
+  private async findPidByPort(_host: string, port: number): Promise<number | null> {
+    // Best-effort: try to discover PID holding the port (Windows: netstat -ano,
+    // Unix: lsof). Used only for orphaned servers (pid -1) so `deltix stop`
+    // can actually kill the process even without a run file.
+    try {
+      const { spawn } = await import('node:child_process');
+      const cmd = process.platform === 'win32' ? 'netstat' : 'lsof';
+      const args =
+        process.platform === 'win32' ? ['-ano'] : ['-i', `:${port}`, '-sTCP:LISTEN', '-t'];
+      const out: string = await new Promise((resolve, reject) => {
+        const child = spawn(cmd, args, { windowsHide: true });
+        let buf = '';
+        child.stdout?.on('data', (c: Buffer) => (buf += c.toString()));
+        child.on('error', reject);
+        child.on('close', () => resolve(buf));
+        setTimeout(() => {
+          try {
+            child.kill();
+          } catch {}
+          resolve(buf);
+        }, 1200);
+      });
+      if (process.platform === 'win32') {
+        for (const line of out.split('\n')) {
+          if (line.includes(`:${port}`) && line.includes('LISTENING')) {
+            const m = line.trim().split(/\s+/).pop();
+            const pid = Number(m);
+            if (Number.isFinite(pid) && pid > 0) return pid;
+          }
+        }
+      } else {
+        const pid = Number(out.trim().split(/\s+/)[0]);
+        if (Number.isFinite(pid) && pid > 0) return pid;
+      }
+    } catch {
+      // ignore
+    }
+    return null;
   }
 
   /**
