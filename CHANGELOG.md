@@ -9,6 +9,14 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.7.24] - 2026-08-31
+
+**In plain terms:** `deltix status` no longer says "not running" when the server is actually alive but its tracking file was deleted, and `deltix start` no longer fails with "Port already in use" in that case.
+
+### Fixed
+
+- **Orphaned `dolt sql-server` (run file deleted while process stayed alive on the port): `deltix status` now probes the port and verifies via the MySQL wire protocol (`SELECT 1` against the expected DB) before reporting "not running", `deltix start` adopts the orphaned server and recreates the run file instead of throwing "Port already in use", and `deltix stop` discovers the PID via `netstat`/`lsof` when the recorded PID is unknown (`-1`).** This covers the remaining repro on 0.7.23 where `status` said "not running" for `hmc-sync` while `Get-NetTCPConnection -LocalPort 3307` still showed the Dolt PID and `deltix start` failed.
+
 ## [0.7.23] - 2026-08-31
 
 **In plain terms:** `deltix status`/`start`/`stop` no longer lose track of the local Dolt server when you run them from a different folder.
