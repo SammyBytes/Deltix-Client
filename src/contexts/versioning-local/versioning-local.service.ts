@@ -43,6 +43,19 @@ export type PullMergeResult =
   | { status: 'merged' }
   | { status: 'conflicts'; conflicts: MergeConflictSummary[] };
 
+export interface LocalStatusRow {
+  table: string;
+  status: string;
+  staged: boolean;
+}
+
+export interface LocalStatus {
+  branch: string | null;
+  staged: LocalStatusRow[];
+  unstaged: LocalStatusRow[];
+  clean: boolean;
+}
+
 export interface LocalBranchList {
   current: string | null;
   local: string[];
@@ -252,6 +265,55 @@ export class VersioningLocalService {
     const binaryPath = await this.deps.binaryManager.ensureInstalled();
     await this.ensureLocalRepo(binaryPath, dataDir, id.repo);
     return this.getRemoteRefHash(binaryPath, dataDir, branch);
+  }
+
+  /**
+   * Git-like working-tree status for the local Dolt repo. Reads
+   * `dolt_status` (table_name, staged, status) and splits into staged
+   * vs unstaged. `dolt status` CLI semantics: staged=false => "Changes not
+   * staged for commit", staged=true => "Changes to be committed".
+   */
+  async getStatus(id: LocalServerIdentity): Promise<LocalStatus> {
+    const dataDir = computeLocalDataDir(this.deps.homeDir, id);
+    if (!existsSync(dataDir)) {
+      throw new CommitDataDirNotFoundError(id.repo);
+    }
+    const binaryPath = await this.deps.binaryManager.ensureInstalled();
+    await this.ensureLocalRepo(binaryPath, dataDir, id.repo);
+
+    const branch = await this.readActiveBranch(binaryPath, dataDir);
+
+    let rows: LocalStatusRow[] = [];
+    try {
+      const raw = await this.queryRows(
+        binaryPath,
+        dataDir,
+        'SELECT table_name, staged, status FROM dolt_status',
+      );
+      rows = raw.map((r) => ({
+        table: String(r.table_name ?? r.table ?? ''),
+        staged: r.staged === true || r.staged === 1 || String(r.staged) === 'true',
+        status: String(r.status ?? 'modified'),
+      }));
+    } catch {
+      // dolt_status may not exist on very old Dolt or empty repo — treat as clean
+      rows = [];
+    }
+
+    const staged = rows.filter((r) => r.staged);
+    const unstaged = rows.filter((r) => !r.staged);
+    return { branch, staged, unstaged, clean: rows.length === 0 };
+  }
+
+  private async readActiveBranch(binaryPath: string, dataDir: string): Promise<string | null> {
+    const result = await runDoltCommand(
+      binaryPath,
+      ['--data-dir', dataDir, 'sql', '-q', 'SELECT active_branch() AS b', '-r', 'csv'],
+      { timeoutMs: 10_000 },
+    );
+    if (result.exitCode !== 0) return null;
+    const active = result.stdout.split('\n').slice(1).join('').trim();
+    return active.length > 0 ? active : null;
   }
 
   /** Switch the working tree to `branch` (public wrapper over the internal checkout). */
@@ -786,5 +848,39 @@ export class VersioningLocalService {
       throw new PushError('schema export', result.stderr);
     }
     return result.stdout;
+  }
+
+  /**
+   * Working-tree diff summary (unstaged changes). Wraps `dolt diff --stat`
+   * so `deltix diff` without server refs shows what the app/ORM just did
+   * to Dolt via the MySQL wire protocol.
+   */
+  async getWorkingDiffSummary(
+    id: LocalServerIdentity,
+    table?: string,
+  ): Promise<{ tables: string[]; raw: string }> {
+    const dataDir = computeLocalDataDir(this.deps.homeDir, id);
+    if (!existsSync(dataDir)) {
+      throw new CommitDataDirNotFoundError(id.repo);
+    }
+    const binaryPath = await this.deps.binaryManager.ensureInstalled();
+    await this.ensureLocalRepo(binaryPath, dataDir, id.repo);
+    const args = ['--data-dir', dataDir, 'diff', '--stat'];
+    if (table) {
+      if (!SAFE_TABLE_RE.test(table)) {
+        throw new PushError('diff', `refusing to diff table with unsafe name "${table}"`);
+      }
+      args.push(table);
+    }
+    const result = await runDoltCommand(binaryPath, args, { timeoutMs: 15_000 });
+    // exit 0 with empty stdout => clean working tree
+    const raw = result.stdout.trim();
+    const tables = raw
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .map((l) => l.split(/\s+/)[0] ?? '')
+      .filter(Boolean);
+    return { tables, raw };
   }
 }
