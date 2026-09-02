@@ -9,6 +9,14 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.7.23] - 2026-08-31
+
+**In plain terms:** `deltix status`/`start`/`stop` no longer lose track of the local Dolt server when you run them from a different folder.
+
+### Fixed
+
+- **`deltix status` reported "not running" while the `dolt sql-server` was still alive on the port, and a subsequent `deltix start` failed with "Port already in use" instead of reusing it (and `deltix stop` failed with "Not running").** Root cause: run state is keyed by the resolved project (`~/.deltix/run/project-<hash>.json` when run from inside a `deltix init`ed tree, `~/.deltix/run/<repo>.json` otherwise). If `status`/`stop`/`start` was later called from a different cwd (e.g. a script) the resolved identity changed and the lookup missed the file. Now `status`/`stop`/`start` fall back to scanning `~/.deltix/run` for any state file for the same repo when the caller has no project context, while preserving per-project isolation when a project is present (two checkouts of the same repo still get separate servers). `versioning-local` also falls back to scanning for the actual data dir so `deltix status` (which shows `dolt_status`) does not fail when the identity mismatches.
+
 ## [0.7.22] - 2026-08-31
 
 **In plain terms:** Dolt now reports `innodb_version` so MySQL health checks that gate on `>= 8.0.28` pass without changes.

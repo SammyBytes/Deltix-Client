@@ -28,7 +28,7 @@
  * `spawn` calls. The binary path is resolved through the binary-manager
  * context (never guessed), satisfying the black-box/integrity policy.
  */
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { connect } from 'node:net';
 import { dirname, join } from 'node:path';
 import type { BackgroundProcess } from '../../acl/dolt-exec';
@@ -168,7 +168,9 @@ export class MysqlEmbeddedService {
 
     const running = await this.status(id);
     if (running.running) {
-      const existing = await this.readState(id);
+      const existing =
+        (await this.readState(id)) ??
+        (!id.projectRoot ? await this.findAnyStateForRepo(id.repo) : null);
       if (existing) return existing;
     }
 
@@ -264,7 +266,8 @@ export class MysqlEmbeddedService {
   }
 
   async stop(id: LocalServerIdentity): Promise<{ repo: string; stopped: boolean }> {
-    const state = await this.readState(id);
+    let state = await this.readState(id);
+    if (!state && !id.projectRoot) state = await this.findAnyStateForRepo(id.repo);
     if (!state) throw new LocalServerNotRunningError(id.repo);
 
     try {
@@ -272,13 +275,29 @@ export class MysqlEmbeddedService {
     } catch {
       // Process already gone — clean up the stale state and report stopped.
     }
-    await rm(this.statePath(id), { force: true });
+    // Remove whichever file actually held the state, not just the primary
+    const p = this.statePath({ repo: state.repo, projectRoot: state.projectRoot });
+    await rm(p, { force: true });
+    // If the caller used a different identity, also clear the primary path
+    const primary = this.statePath(id);
+    if (primary !== p) await rm(primary, { force: true }).catch(() => {});
     return { repo: id.repo, stopped: true };
   }
 
   async status(id: LocalServerIdentity): Promise<LocalServerStatus> {
     const dataDir = this.dataDirFor(id);
-    const state = await this.readState(id);
+    // Primary lookup: state file keyed by the resolved identity (project
+    // hash when run from inside a `deltix init`ed tree, legacy repo name
+    // otherwise). If the caller had no project context (e.g. ran from a
+    // different cwd or passed an explicit repo without a project), scan for
+    // any run file for the same repo — the identity no longer matches the
+    // file that was written. When the caller *does* have a project, keep
+    // strict isolation (two checkouts of the same repo each have their own
+    // server) and do not fall back to another project's file.
+    let state = await this.readState(id);
+    if (!state && !id.projectRoot) {
+      state = await this.findAnyStateForRepo(id.repo);
+    }
     if (!state) {
       return { repo: id.repo, running: false, dataDir };
     }
@@ -291,8 +310,14 @@ export class MysqlEmbeddedService {
     }
 
     if (!alive) {
-      await rm(this.statePath(id), { force: true }).catch(() => {});
-      return { repo: id.repo, running: false, dataDir };
+      // Clean up whichever file actually held the stale PID, not just the
+      // primary path we looked up.
+      const stalePath = this.statePath({ repo: state.repo, projectRoot: state.projectRoot });
+      await rm(stalePath, { force: true }).catch(() => {});
+      if (state.projectRoot) {
+        await rm(this.statePath({ repo: state.repo }), { force: true }).catch(() => {});
+      }
+      return { repo: id.repo, running: false, dataDir: state.dataDir };
     }
 
     return {
@@ -300,7 +325,7 @@ export class MysqlEmbeddedService {
       running: alive,
       pid: state.pid,
       port: state.port,
-      dataDir,
+      dataDir: state.dataDir,
     };
   }
 
@@ -311,6 +336,34 @@ export class MysqlEmbeddedService {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Scans `~/.deltix/run` for any state file whose `repo` matches, regardless
+   * of which `projectRoot` it was keyed with. Used as a fallback when the
+   * current `resolveServerIdentity` does not match the identity that ran
+   * `deltix start` (e.g. caller changed cwd). Returns the first live entry
+   * for that repo, or null if none.
+   */
+  private async findAnyStateForRepo(repo: string): Promise<RunState | null> {
+    let files: string[];
+    try {
+      files = await readdir(join(this.homeDir, 'run'));
+    } catch {
+      return null;
+    }
+    for (const file of files) {
+      if (!file.endsWith('.json')) continue;
+      const full = join(this.homeDir, 'run', file);
+      try {
+        const raw = await readFile(full, 'utf8');
+        const st = JSON.parse(raw) as RunState;
+        if (st.repo === repo) return st;
+      } catch {
+        // ignore corrupt file
+      }
+    }
+    return null;
   }
 
   private async writeState(state: RunState): Promise<void> {
