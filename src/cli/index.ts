@@ -66,6 +66,15 @@ import {
   VersioningLocalService,
 } from '../contexts/versioning-local';
 import { getClientBuildInfo } from '../shared/build-info';
+import {
+  DEFAULT_BRANCH,
+  DEFAULT_DOLT_PORT,
+  DEFAULT_MYSQL_PORT,
+  DEFAULT_SERVER_PORT,
+  DEFAULT_SERVER_URL,
+  TIMEOUT,
+  USAGE,
+} from '../shared/constants';
 import { applyPersistedConfigDefaults, loadEnv } from '../shared/env';
 import { buildFetchTlsOptions } from '../shared/http-tls';
 import {
@@ -211,7 +220,7 @@ async function runPush(args: string[]): Promise<number> {
   try {
     const localService = await newLocalService();
 
-    const branch = 'main';
+    const branch = DEFAULT_BRANCH;
     const commits = await localService.getUnpushedCommits(identity, branch);
     const result = await createVersioningService().pushCommits(identity.repo, commits);
 
@@ -302,7 +311,7 @@ async function runPull(args: string[]): Promise<number> {
   if (!identity) {
     return 1;
   }
-  const branch = 'main';
+  const branch = DEFAULT_BRANCH;
   try {
     const local = await newLocalService();
 
@@ -370,7 +379,7 @@ async function runFetch(args: string[]): Promise<number> {
   if (!identity) {
     return 1;
   }
-  const branch = 'main';
+  const branch = DEFAULT_BRANCH;
   try {
     const local = await newLocalService();
     const from = await local.getRemoteHead(identity, branch);
@@ -413,10 +422,10 @@ async function runClone(args: string[]): Promise<number> {
     const identity = { repo: project.config.repo, projectRoot: project.root };
     const local = await newLocalService();
     await local.initLocalRepo(identity);
-    const { commits } = await createVersioningService().pullCommits(repo, 'main', null);
+    const { commits } = await createVersioningService().pullCommits(repo, DEFAULT_BRANCH, null);
     if (commits.length > 0) {
-      const head = await local.applyCommits(identity, 'main', commits);
-      await local.advanceRemoteRef(identity, 'main', head);
+      const head = await local.applyCommits(identity, DEFAULT_BRANCH, commits);
+      await local.advanceRemoteRef(identity, DEFAULT_BRANCH, head);
     }
     printSuccess(`Cloned ${repo} into ${targetDir}`, { commits: commits.length });
     printInfo(`Next: cd ${repo} && deltix start`);
@@ -1231,14 +1240,18 @@ async function runConfigure(): Promise<number> {
   printInfo('Deltix connection setup (Ctrl+C to cancel; press Enter to keep the default)');
 
   const serverUrl = await promptText('Deltix-Server REST URL', {
-    default: 'http://127.0.0.1:9090',
+    default: DEFAULT_SERVER_URL,
   });
 
   // Parse out the host from the REST URL so we can fetch its TLS cert and
   // (when reached by bare IP) suggest a DNS name for SNI.
   const parsed = new URL(serverUrl);
   const host = parsed.hostname || '127.0.0.1';
-  const port = parsed.port ? Number(parsed.port) : parsed.protocol === 'https:' ? 443 : 9090;
+  const port = parsed.port
+    ? Number(parsed.port)
+    : parsed.protocol === 'https:'
+      ? 443
+      : DEFAULT_SERVER_PORT;
   const isIpAddress = /^(\d{1,3}\.){3}\d{1,3}$|:/.test(host);
 
   let httpTlsCaPath: string | undefined;
@@ -1292,7 +1305,7 @@ async function runConfigure(): Promise<number> {
     default: '127.0.0.1',
   });
   const localPortRaw = await promptText('Local Dolt SQL port (must be free)', {
-    default: '3306',
+    default: DEFAULT_MYSQL_PORT,
   });
   const localPort = Number.parseInt(localPortRaw, 10);
 
@@ -1302,14 +1315,14 @@ async function runConfigure(): Promise<number> {
     httpTlsCaPath,
     httpTlsServerNameOverride,
     localHost,
-    localPort: Number.isFinite(localPort) ? localPort : 3306,
+    localPort: Number.isFinite(localPort) ? localPort : DEFAULT_MYSQL_PORT,
   });
 
   printSuccess(`Configuration saved to ${defaultConfigPath}`);
   printKeyValues({
     serverUrl,
     localHost,
-    localPort: Number.isFinite(localPort) ? localPort : 3306,
+    localPort: Number.isFinite(localPort) ? localPort : DEFAULT_MYSQL_PORT,
     httpTlsCaPath,
     httpTlsServerNameOverride,
   });
@@ -1645,7 +1658,7 @@ async function runStatus(args: string[]): Promise<number> {
       if (ws.clean) {
         printInfo('Working tree clean — nothing to commit.');
         printInfo(
-          'Run a migration against Dolt (:3307) and re-run `deltix status` to see changes.',
+          `Run a migration against Dolt (:${status.port ?? DEFAULT_DOLT_PORT}) and re-run \`deltix status\` to see changes.`,
         );
       } else {
         if (ws.staged.length > 0) {

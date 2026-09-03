@@ -3,6 +3,17 @@ import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runDoltCommand } from '../../acl/dolt-exec';
+import { parseCsvLine } from '../../core/csv';
+import { escapeSql, SAFE_TABLE_RE, sanitizeAuthor, sqlLiteral } from '../../core/table-name';
+import {
+  BRANCH_NAME_RE,
+  DEFAULT_BRANCH,
+  DEFAULT_COMMIT_AUTHOR,
+  DEFAULT_COMMIT_EMAIL_DOMAIN,
+  DEFAULT_DOLT_PORT,
+  REMOTE_TRACKING_PREFIX,
+  TIMEOUT,
+} from '../../shared/constants';
 import type { BinaryManager } from '../binary-manager';
 import type { LocalServerIdentity } from '../mysql-embedded';
 import { computeLocalDataDir } from '../mysql-embedded';
@@ -83,51 +94,6 @@ function remoteRefName(branch: string): string {
   return `origin/${branch}`;
 }
 
-function escapeSql(value: string): string {
-  return value.replace(/'/g, "''");
-}
-
-const SAFE_TABLE_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
-
-function sanitizeAuthor(name: string): string {
-  return name.replace(/[^a-zA-Z0-9_.-]/g, '_');
-}
-
-function sqlLiteral(value: string): string {
-  return `'${value.replace(/'/g, "''")}'`;
-}
-
-/** Parse one CSV line (handles quoted fields and doubled quotes). */
-function parseCsvLine(line: string): string[] {
-  const result: string[] = [];
-  let current = '';
-  let inQuotes = false;
-  for (let i = 0; i < line.length; i++) {
-    const char = line[i] ?? '';
-    if (inQuotes) {
-      if (char === '"') {
-        if (line[i + 1] === '"') {
-          current += '"';
-          i++;
-        } else {
-          inQuotes = false;
-        }
-      } else {
-        current += char;
-      }
-    } else if (char === '"') {
-      inQuotes = true;
-    } else if (char === ',') {
-      result.push(current);
-      current = '';
-    } else {
-      current += char;
-    }
-  }
-  result.push(current);
-  return result;
-}
-
 export class VersioningLocalService {
   constructor(private readonly deps: VersioningLocalDeps) {}
 
@@ -155,7 +121,7 @@ export class VersioningLocalService {
     // Stage: allow-list (tables) or full working tree.
     const stageArgs = tables && tables.length > 0 ? ['add', ...tables] : ['add', '-A'];
     const addResult = await runDoltCommand(binaryPath, ['--data-dir', dataDir, ...stageArgs], {
-      timeoutMs: 30_000,
+      timeoutMs: TIMEOUT.DOLT_COMMIT,
     });
     if (addResult.exitCode !== 0) {
       throw new CommitError('add', addResult.stderr);
@@ -166,14 +132,17 @@ export class VersioningLocalService {
     // extra args into the dolt invocation (OWASP A03). Falls back to the
     // historical `deltix` literal when no session username is available, so
     // pre-session callers (tests, scripts) keep working unchanged.
-    const safeAuthor = (options.authorName ?? 'deltix').replace(/[^A-Za-z0-9_.-]/g, '_');
+    const safeAuthor = (options.authorName ?? DEFAULT_COMMIT_AUTHOR).replace(
+      /[^A-Za-z0-9_.-]/g,
+      '_',
+    );
     const authorFlag = `${safeAuthor} <${safeAuthor}@deltix.local>`;
 
     // Commit — may fail with exit code 1 if there are no staged changes.
     const commitResult = await runDoltCommand(
       binaryPath,
       ['--data-dir', dataDir, 'commit', '-m', message, `--author=${authorFlag}`],
-      { timeoutMs: 30_000 },
+      { timeoutMs: TIMEOUT.DOLT_COMMIT },
     );
     if (commitResult.exitCode !== 0) {
       const output = (commitResult.stdout + commitResult.stderr).trim();
@@ -203,7 +172,7 @@ export class VersioningLocalService {
    */
   async getUnpushedCommits(
     id: LocalServerIdentity,
-    branch = 'main',
+    branch = DEFAULT_BRANCH,
   ): Promise<LocalCommitWithData[]> {
     const dataDir = computeLocalDataDir(this.deps.homeDir, id);
     if (!existsSync(dataDir)) {
@@ -246,7 +215,7 @@ export class VersioningLocalService {
   }
 
   /** Current head hash of a local branch (or `null` if it does not exist). */
-  async getBranchHead(id: LocalServerIdentity, branch = 'main'): Promise<string | null> {
+  async getBranchHead(id: LocalServerIdentity, branch = DEFAULT_BRANCH): Promise<string | null> {
     const dataDir = computeLocalDataDir(this.deps.homeDir, id);
     if (!existsSync(dataDir)) {
       throw new CommitDataDirNotFoundError(id.repo);
@@ -257,7 +226,7 @@ export class VersioningLocalService {
   }
 
   /** Head of the remote-tracking ref `origin/<branch>` (null if never synced). */
-  async getRemoteHead(id: LocalServerIdentity, branch = 'main'): Promise<string | null> {
+  async getRemoteHead(id: LocalServerIdentity, branch = DEFAULT_BRANCH): Promise<string | null> {
     const dataDir = computeLocalDataDir(this.deps.homeDir, id);
     if (!existsSync(dataDir)) {
       throw new CommitDataDirNotFoundError(id.repo);
@@ -378,7 +347,7 @@ export class VersioningLocalService {
     const result = await runDoltCommand(
       binaryPath,
       ['--data-dir', dataDir, 'sql', '-q', 'SELECT active_branch() AS b', '-r', 'csv'],
-      { timeoutMs: 10_000 },
+      { timeoutMs: TIMEOUT.DOLT_BRANCH },
     );
     if (result.exitCode !== 0) return null;
     const active = result.stdout.split('\n').slice(1).join('').trim();
@@ -409,7 +378,7 @@ export class VersioningLocalService {
       const svc = new MysqlEmbeddedService({
         homeDir: this.deps.homeDir,
         localHost: env.DELTIX_LOCAL_HOST ?? '127.0.0.1',
-        localPort: Number(env.DELTIX_LOCAL_PORT ?? 3307),
+        localPort: Number(env.DELTIX_LOCAL_PORT ?? DEFAULT_DOLT_PORT),
         binaryManager: this.deps
           .binaryManager as unknown as import('../binary-manager').BinaryManager,
       });
@@ -417,7 +386,7 @@ export class VersioningLocalService {
         await svc.stop(id);
       } catch {}
       const result = await runDoltCommand(binaryPath, ['--data-dir', dataDir, 'checkout', branch], {
-        timeoutMs: 10_000,
+        timeoutMs: TIMEOUT.DOLT_BRANCH,
       });
       // Restart even if checkout failed, to not leave the DB down
       try {
@@ -437,7 +406,7 @@ export class VersioningLocalService {
       const { loadEnv } = await import('../../shared/env');
       const env = loadEnv();
       const host = env.DELTIX_LOCAL_HOST ?? '127.0.0.1';
-      const port = Number(env.DELTIX_LOCAL_PORT ?? 3307);
+      const port = Number(env.DELTIX_LOCAL_PORT ?? DEFAULT_DOLT_PORT);
       return await isTcpPortOpen(host, port);
     } catch {
       return false;
@@ -447,11 +416,11 @@ export class VersioningLocalService {
   private async checkoutViaMysql(id: LocalServerIdentity, branch: string): Promise<boolean | null> {
     try {
       const env = await import('../mysql-embedded/mysql-embedded.service');
-      // We don't have host/port here — try default 127.0.0.1:3307 via mysql
+      // We don't have host/port here — try default 127.0.0.1:DEFAULT_DOLT_PORT via mysql
       const mysql = await import('mysql2/promise');
       const conn = await mysql.createConnection({
         host: '127.0.0.1',
-        port: 3307,
+        port: DEFAULT_DOLT_PORT,
         user: 'root',
         database: id.repo,
         connectTimeout: 1200,
@@ -484,7 +453,7 @@ export class VersioningLocalService {
       const mysql = await import('mysql2/promise');
       const conn = await mysql.createConnection({
         host: '127.0.0.1',
-        port: 3307,
+        port: DEFAULT_DOLT_PORT,
         user: 'root',
         database: id.repo,
         connectTimeout: 1200,
@@ -502,7 +471,7 @@ export class VersioningLocalService {
     }
     const binaryPath = await this.deps.binaryManager.ensureInstalled();
     const result = await runDoltCommand(binaryPath, ['--data-dir', dir, 'branch', branch], {
-      timeoutMs: 10_000,
+      timeoutMs: TIMEOUT.DOLT_BRANCH,
     });
     if (result.exitCode !== 0)
       throw new PushError('branch', result.stderr.trim() || result.stdout.trim());
@@ -514,7 +483,7 @@ export class VersioningLocalService {
       const mysql = await import('mysql2/promise');
       const conn = await mysql.createConnection({
         host: '127.0.0.1',
-        port: 3307,
+        port: DEFAULT_DOLT_PORT,
         user: 'root',
         database: id.repo,
         connectTimeout: 1200,
@@ -532,7 +501,7 @@ export class VersioningLocalService {
     }
     const binaryPath = await this.deps.binaryManager.ensureInstalled();
     const result = await runDoltCommand(binaryPath, ['--data-dir', dir, 'branch', '-d', branch], {
-      timeoutMs: 10_000,
+      timeoutMs: TIMEOUT.DOLT_BRANCH,
     });
     if (result.exitCode !== 0)
       throw new PushError('branch', result.stderr.trim() || result.stdout.trim());
@@ -543,13 +512,13 @@ export class VersioningLocalService {
     source: string,
     target?: string,
   ): Promise<{ fastForward: boolean; conflicts: number }> {
-    const tgt = target ?? (await this.getCurrentBranch(id)) ?? 'main';
+    const tgt = target ?? (await this.getCurrentBranch(id)) ?? DEFAULT_BRANCH;
     // Try wire first
     try {
       const mysql = await import('mysql2/promise');
       const conn = await mysql.createConnection({
         host: '127.0.0.1',
-        port: 3307,
+        port: DEFAULT_DOLT_PORT,
         user: 'root',
         database: id.repo,
         connectTimeout: 1500,
@@ -580,7 +549,7 @@ export class VersioningLocalService {
     const binaryPath = await this.deps.binaryManager.ensureInstalled();
     await this.checkoutBranch(binaryPath, dir, tgt);
     const result = await runDoltCommand(binaryPath, ['--data-dir', dir, 'merge', source], {
-      timeoutMs: 30_000,
+      timeoutMs: TIMEOUT.DOLT_COMMIT,
     });
     if (result.exitCode !== 0) {
       const conflicts = await this.readConflicts(binaryPath, dir);
@@ -595,7 +564,7 @@ export class VersioningLocalService {
       const mysql = await import('mysql2/promise');
       const conn = await mysql.createConnection({
         host: '127.0.0.1',
-        port: 3307,
+        port: DEFAULT_DOLT_PORT,
         user: 'root',
         database: id.repo,
         connectTimeout: 1000,
@@ -623,7 +592,7 @@ export class VersioningLocalService {
       const mysql = await import('mysql2/promise');
       const conn = await mysql.createConnection({
         host: '127.0.0.1',
-        port: 3307,
+        port: DEFAULT_DOLT_PORT,
         user: 'root',
         database: id.repo,
         connectTimeout: 800,
@@ -638,10 +607,10 @@ export class VersioningLocalService {
       const local = (rows as Array<Record<string, string>>)
         .map((r) => String(r.name ?? ''))
         .filter(Boolean)
-        .filter((n) => !n.startsWith('origin/'));
+        .filter((n) => !n.startsWith(REMOTE_TRACKING_PREFIX));
       const remote = (rows as Array<Record<string, string>>)
         .map((r) => String(r.name ?? ''))
-        .filter((n) => n.startsWith('origin/'));
+        .filter((n) => n.startsWith(REMOTE_TRACKING_PREFIX));
       return { current: current ? String(current) : null, local, remote };
     } catch {}
     const dataDir = computeLocalDataDir(this.deps.homeDir, id);
@@ -651,7 +620,7 @@ export class VersioningLocalService {
         // Retry via CLI with fallback dir
         const binaryPath = await this.deps.binaryManager.ensureInstalled();
         const result = await runDoltCommand(binaryPath, ['--data-dir', fb, 'branch', '-a'], {
-          timeoutMs: 10_000,
+          timeoutMs: TIMEOUT.DOLT_BRANCH,
         });
         if (result.exitCode !== 0)
           throw new PushError('branch', result.stderr.trim() || result.stdout.trim());
@@ -667,7 +636,7 @@ export class VersioningLocalService {
             .replace(/^\s+/, '')
             .trim();
           if (!name) continue;
-          if (name.startsWith('origin/')) remote.push(name);
+          if (name.startsWith(REMOTE_TRACKING_PREFIX)) remote.push(name);
           else {
             local.push(name);
             if (isCurrent) current = name;
@@ -680,7 +649,7 @@ export class VersioningLocalService {
     const binaryPath = await this.deps.binaryManager.ensureInstalled();
     await this.ensureLocalRepo(binaryPath, dataDir, id.repo);
     const result = await runDoltCommand(binaryPath, ['--data-dir', dataDir, 'branch', '-a'], {
-      timeoutMs: 10_000,
+      timeoutMs: TIMEOUT.DOLT_BRANCH,
     });
     if (result.exitCode !== 0) {
       throw new PushError('branch', result.stderr.trim() || result.stdout.trim());
@@ -701,7 +670,7 @@ export class VersioningLocalService {
       if (!name) {
         continue;
       }
-      if (name.startsWith('origin/')) {
+      if (name.startsWith(REMOTE_TRACKING_PREFIX)) {
         remote.push(name);
       } else {
         local.push(name);
@@ -727,7 +696,7 @@ export class VersioningLocalService {
     const result = await runDoltCommand(
       binaryPath,
       ['--data-dir', dataDir, 'branch', '-f', remoteRefName(branch), hash],
-      { timeoutMs: 10_000 },
+      { timeoutMs: TIMEOUT.DOLT_BRANCH },
     );
     if (result.exitCode !== 0) {
       throw new PushError('branch', result.stderr.trim() || result.stdout.trim());
@@ -762,7 +731,7 @@ export class VersioningLocalService {
         continue;
       }
       const add = await runDoltCommand(binaryPath, ['--data-dir', dataDir, 'add', ...names], {
-        timeoutMs: 30_000,
+        timeoutMs: TIMEOUT.DOLT_COMMIT,
       });
       if (add.exitCode !== 0) {
         throw new PushError('add', add.stderr);
@@ -778,7 +747,7 @@ export class VersioningLocalService {
           commit.message,
           `--author=${safeAuthor} <${safeAuthor}@deltix.local>`,
         ],
-        { timeoutMs: 30_000 },
+        { timeoutMs: TIMEOUT.DOLT_COMMIT },
       );
       if (commitResult.exitCode !== 0) {
         throw new PushError('commit', commitResult.stderr.trim() || commitResult.stdout.trim());
@@ -818,7 +787,7 @@ export class VersioningLocalService {
       const create = await runDoltCommand(
         binaryPath,
         ['--data-dir', dataDir, 'sql', '-q', table.schema],
-        { timeoutMs: 30_000 },
+        { timeoutMs: TIMEOUT.DOLT_COMMIT },
       );
       if (create.exitCode !== 0 && !create.stderr.toLowerCase().includes('already exists')) {
         throw new PushError(`create ${table.name}`, create.stderr.trim());
@@ -837,7 +806,9 @@ export class VersioningLocalService {
             importArgs.push('--continue');
           }
           importArgs.push(table.name, tmp);
-          const imp = await runDoltCommand(binaryPath, importArgs, { timeoutMs: 120_000 });
+          const imp = await runDoltCommand(binaryPath, importArgs, {
+            timeoutMs: TIMEOUT.DOLT_IMPORT,
+          });
           if (imp.exitCode !== 0) {
             throw new PushError(`import ${table.name}`, imp.stderr.trim() || imp.stdout.trim());
           }
@@ -856,7 +827,7 @@ export class VersioningLocalService {
             '-q',
             `UPDATE ${table.name} SET \`${col}\` = FROM_BASE64(CAST(\`${col}\` AS CHAR))`,
           ],
-          { timeoutMs: 60_000 },
+          { timeoutMs: TIMEOUT.DOLT_PULL_MERGE },
         );
         if (fix.exitCode !== 0) {
           throw new PushError(`from_base64 ${table.name}.${col}`, fix.stderr.trim());
@@ -869,16 +840,16 @@ export class VersioningLocalService {
     const current = await runDoltCommand(
       binaryPath,
       ['--data-dir', dataDir, 'sql', '-q', 'SELECT active_branch() AS b', '-r', 'csv'],
-      { timeoutMs: 10_000 },
+      { timeoutMs: TIMEOUT.DOLT_BRANCH },
     );
-    // Exact compare, not substring: 'origin/main' contains 'main', so a naive
+    // Exact compare, not substring: 'origin/main' contains DEFAULT_BRANCH, so a naive
     // includes() would wrongly conclude we are already on the target branch.
     const active = current.stdout.split('\n').slice(1).join('').trim();
     if (active === branch) {
       return;
     }
     const checkout = await runDoltCommand(binaryPath, ['--data-dir', dataDir, 'checkout', branch], {
-      timeoutMs: 10_000,
+      timeoutMs: TIMEOUT.DOLT_BRANCH,
     });
     if (checkout.exitCode === 0) {
       return;
@@ -888,7 +859,7 @@ export class VersioningLocalService {
     const create = await runDoltCommand(
       binaryPath,
       ['--data-dir', dataDir, 'checkout', '-b', branch],
-      { timeoutMs: 10_000 },
+      { timeoutMs: TIMEOUT.DOLT_BRANCH },
     );
     if (create.exitCode !== 0) {
       throw new PushError('checkout', create.stderr.trim() || create.stdout.trim());
@@ -906,7 +877,7 @@ export class VersioningLocalService {
     const create = await runDoltCommand(
       binaryPath,
       ['--data-dir', dataDir, 'sql', '-q', table.schema],
-      { timeoutMs: 30_000 },
+      { timeoutMs: TIMEOUT.DOLT_COMMIT },
     );
     if (create.exitCode !== 0) {
       if (!create.stderr.toLowerCase().includes('already exists')) {
@@ -915,7 +886,7 @@ export class VersioningLocalService {
       const truncate = await runDoltCommand(
         binaryPath,
         ['--data-dir', dataDir, 'sql', '-q', `TRUNCATE TABLE ${table.name}`],
-        { timeoutMs: 30_000 },
+        { timeoutMs: TIMEOUT.DOLT_COMMIT },
       );
       if (truncate.exitCode !== 0) {
         throw new PushError(`truncate ${table.name}`, truncate.stderr.trim());
@@ -949,7 +920,7 @@ export class VersioningLocalService {
           '-q',
           `INSERT INTO ${table.name} (${cols}) VALUES (${vals})`,
         ],
-        { timeoutMs: 30_000 },
+        { timeoutMs: TIMEOUT.DOLT_COMMIT },
       );
       if (insert.exitCode !== 0) {
         throw new PushError(`insert ${table.name}`, insert.stderr.trim());
@@ -983,8 +954,16 @@ export class VersioningLocalService {
     }
     const result = await runDoltCommand(
       binaryPath,
-      ['--data-dir', dataDir, 'init', '--name', 'deltix', '--email', 'deltix@deltix.local'],
-      { timeoutMs: 30_000 },
+      [
+        '--data-dir',
+        dataDir,
+        'init',
+        '--name',
+        DEFAULT_COMMIT_AUTHOR,
+        '--email',
+        'deltix@deltix.local',
+      ],
+      { timeoutMs: TIMEOUT.DOLT_COMMIT },
     );
     if (result.exitCode !== 0) {
       throw new LocalRepoInitError(repo, result.stderr.trim() || result.stdout.trim());
@@ -1015,7 +994,7 @@ export class VersioningLocalService {
         '-r',
         'csv',
       ],
-      { timeoutMs: 10_000 },
+      { timeoutMs: TIMEOUT.DOLT_BRANCH },
     );
     if (result.exitCode !== 0) {
       return null;
@@ -1050,7 +1029,7 @@ export class VersioningLocalService {
     const result = await runDoltCommand(
       binaryPath,
       ['--data-dir', dataDir, 'sql', '-q', query, '-r', 'json'],
-      { timeoutMs: 30_000 },
+      { timeoutMs: TIMEOUT.DOLT_COMMIT },
     );
     if (result.exitCode !== 0) {
       throw new PushError('sql', result.stderr.trim() || result.stdout.trim());
@@ -1068,7 +1047,10 @@ export class VersioningLocalService {
    * clean/fast-forward merge, or `conflicts` (leaving the repo mid-merge) when
    * Dolt reports content conflicts.
    */
-  async mergeFromRemote(id: LocalServerIdentity, branch = 'main'): Promise<PullMergeResult> {
+  async mergeFromRemote(
+    id: LocalServerIdentity,
+    branch = DEFAULT_BRANCH,
+  ): Promise<PullMergeResult> {
     const dataDir = computeLocalDataDir(this.deps.homeDir, id);
     if (!existsSync(dataDir)) {
       throw new CommitDataDirNotFoundError(id.repo);
@@ -1087,7 +1069,7 @@ export class VersioningLocalService {
         '-m',
         `Merge ${remoteRefName(branch)} into ${branch}`,
       ],
-      { timeoutMs: 60_000 },
+      { timeoutMs: TIMEOUT.DOLT_PULL_MERGE },
     );
     if (merge.exitCode === 0) {
       return { status: 'merged' };
@@ -1100,7 +1082,7 @@ export class VersioningLocalService {
   }
 
   /** Abort an in-progress merge (e.g. after `deltix pull --abort`). */
-  async mergeAbort(id: LocalServerIdentity, branch = 'main'): Promise<void> {
+  async mergeAbort(id: LocalServerIdentity, branch = DEFAULT_BRANCH): Promise<void> {
     const dataDir = computeLocalDataDir(this.deps.homeDir, id);
     if (!existsSync(dataDir)) {
       throw new CommitDataDirNotFoundError(id.repo);
@@ -1109,7 +1091,7 @@ export class VersioningLocalService {
     await this.ensureLocalRepo(binaryPath, dataDir, id.repo);
     await this.checkoutBranch(binaryPath, dataDir, branch);
     const result = await runDoltCommand(binaryPath, ['--data-dir', dataDir, 'merge', '--abort'], {
-      timeoutMs: 30_000,
+      timeoutMs: TIMEOUT.DOLT_COMMIT,
     });
     if (result.exitCode !== 0) {
       throw new PushError('merge --abort', result.stderr.trim() || result.stdout.trim());
@@ -1138,7 +1120,7 @@ export class VersioningLocalService {
     const result = await runDoltCommand(
       binaryPath,
       ['--data-dir', dataDir, 'diff', '--name-only', `${commitHash}^..${commitHash}`],
-      { timeoutMs: 10_000 },
+      { timeoutMs: TIMEOUT.DOLT_BRANCH },
     );
     if (result.exitCode !== 0) {
       return [];
@@ -1167,7 +1149,7 @@ export class VersioningLocalService {
         '-r',
         'csv',
       ],
-      { timeoutMs: 30_000 },
+      { timeoutMs: TIMEOUT.DOLT_COMMIT },
     );
     if (result.exitCode !== 0) {
       throw new PushError('sql export', result.stderr);
@@ -1183,7 +1165,7 @@ export class VersioningLocalService {
     const result = await runDoltCommand(
       binaryPath,
       ['--data-dir', dataDir, 'schema', 'export', table],
-      { timeoutMs: 10_000 },
+      { timeoutMs: TIMEOUT.DOLT_BRANCH },
     );
     if (result.exitCode !== 0) {
       throw new PushError('schema export', result.stderr);
@@ -1215,7 +1197,7 @@ export class VersioningLocalService {
       }
       args.push(table);
     }
-    const result = await runDoltCommand(binaryPath, args, { timeoutMs: 15_000 });
+    const result = await runDoltCommand(binaryPath, args, { timeoutMs: TIMEOUT.DOLT_DIFF_STAT });
     // exit 0 with empty stdout => clean working tree
     const raw = result.stdout.trim();
     const tables = raw

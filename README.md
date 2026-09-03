@@ -1,259 +1,291 @@
-# Deltix-Client
+<div align="center">
 
-[![CI](https://github.com/SammyBytes/Deltix-Client/actions/workflows/ci.yml/badge.svg)](https://github.com/SammyBytes/Deltix-Client/actions/workflows/ci.yml)
-[![Release](https://github.com/SammyBytes/Deltix-Client/actions/workflows/release.yml/badge.svg)](https://github.com/SammyBytes/Deltix-Client/releases/latest)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
+<img src="https://capsule-render.vercel.app/api?type=waving&color=0:111827,100:1f2937&height=220&section=header&text=Deltix&fontSize=72&fontColor=ffffff&animation=fadeIn&desc=Git%20for%20databases%20—%20from%20your%20terminal&descAlignY=75&descAlign=50" width="100%" />
 
-Git-style version control for relational databases — from your terminal.
-Deltix-Client is a single-binary CLI that runs a local [Dolt](https://github.com/dolthub/dolt)
-engine and syncs commits with a [Deltix-Server](https://github.com/SammyBytes/Deltix-Server)
-control plane.
+<br />
 
-MIT licensed. See [`LICENSE`](./LICENSE).
+[![CI](https://img.shields.io/github/actions/workflow/status/SammyBytes/Deltix-Client/ci.yml?style=flat-square&label=ci&color=111827)](https://github.com/SammyBytes/Deltix-Client/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/SammyBytes/Deltix-Client?style=flat-square&label=release&color=111827)](https://github.com/SammyBytes/Deltix-Client/releases/latest)
+[![License](https://img.shields.io/badge/license-MIT-16a34a?style=flat-square)](./LICENSE)
+[![Dolt](https://img.shields.io/badge/powered%20by-Dolt%20%E2%80%A2%202.3.1-0ea5e9?style=flat-square)](https://github.com/dolthub/dolt)
+[![Bun](https://img.shields.io/badge/runtime-Bun%201.4-000000?style=flat-square&logo=bun)](https://bun.sh)
 
-> **v0.7.16** — see [CHANGELOG.md](./CHANGELOG.md) for the full release history
-> (v0.7.1 → v0.7.16). Highlights since the prior README: masked secret prompts,
-> `--continue` for safe data imports, auto-refresh of access tokens, per-project
-> repo autodetect from cwd, and many small operator-pain DX wins.
+**One binary. One connection string change. Your database, versioned like code.**
+
+`DATABASE_URL=mysql://root@127.0.0.1:3307/repo` — that's the whole migration.
+
+<br />
+
+[Install](#install) • [Quick start](#quick-start) • [Workflow](#workflow) • [Commands](#commands) • [Architecture](#architecture)
+
+</div>
+
+---
+
+<div align="center">
+
+```bash
+deltix status        # 50ms — what changed?
+deltix commit -m "add email column"
+deltix push          # team is up to date
+```
+
+<img src="./assets/demo-quickstart.gif" width="720" alt="deltix quick start — init → start → status" />
+<img src="./assets/demo-status.gif" width="720" alt="deltix status — staged vs unstaged" />
+<img src="./assets/demo-branch.gif" width="720" alt="deltix branch — create → checkout → list" />
+<img src="./assets/demo-drizzle.gif" width="720" alt="Drizzle + Deltix — migrate → status → commit" />
+
+<sub>Isolated demos — no sensitive data, repo `demo-hello` in `/tmp`, re-record with `vhs assets/tapes/*.tape`.</sub>
+
+</div>
+
+---
+
+## Why Deltix
+
+<div align="center">
+
+| Without Deltix | With Deltix |
+|---|---|
+| `mysqldump > dump.sql` → Drive → Slack → `mysql < dump.sql` (overwrites) | `deltix push` → `deltix pull` (merges) |
+| No branches. Copy DB to `appdb_test` to try. | `deltix branch create feature` + `deltix checkout` — isolated |
+| No diff. `SHOW CREATE TABLE` by eye. | `deltix diff` — row + schema diff |
+| No history. Restore backup from 3 days ago. | `deltix log` + `checkout <hash>` |
+
+</div>
+
+---
+
+## Features
+
+<table>
+<tr>
+<td width="50%">
+
+**Branch & merge — for real**
+`feature-emails` with `tags` does not exist on `main` until `merge`. Fast-forward, per-cell conflicts. Validated with Drizzle.
+
+</td>
+<td width="50%">
+
+**50ms feedback loop**
+`status` via MySQL wire (`mysql2` to `:3307`), not `dolt` spawn. Was 6s on Windows.
+
+</td>
+</tr>
+<tr>
+<td>
+
+**Diff without server**
+`deltix diff` shows `dolt diff --stat` locally. No `from/to` needed for working tree.
+
+</td>
+<td>
+
+**Git-like, not Git**
+`status` → staged vs unstaged (`dolt_status`), `commit -m`, `push`/`pull`, `log -n 5`.
+
+</td>
+</tr>
+</table>
 
 ---
 
 ## Install
 
-Fastest path — a single command that downloads the right binary for your
-OS/arch, verifies its SHA-256, and installs to `~/.local/bin` (Linux/macOS,
-including Arch):
+<table>
+<tr>
+<th>OS</th>
+<th>Command</th>
+</tr>
+<tr>
+<td><b>Linux / macOS</b></td>
+<td>
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SammyBytes/Deltix-Client/main/scripts/get-deltix-client.sh | bash
+# → ~/.local/bin/deltix
 ```
 
-Windows (PowerShell one-liner, no admin required):
+</td>
+</tr>
+<tr>
+<td><b>Windows</b></td>
+<td>
 
 ```powershell
-# Latest release, install to $HOME\.local\bin\deltix.exe
-iex "& { $(irm https://raw.githubusercontent.com/SammyBytes/Deltix-Client/main/scripts/get-deltix-client.ps1) }"
-
-# Pin a version
-$env:VERSION = '0.7.17'
-iex "& { $(irm https://raw.githubusercontent.com/SammyBytes/Deltix-Client/main/scripts/get-deltix-client.ps1) }"
-Remove-Item Env:VERSION
-
-# System-wide install (admin prompt once; writes to C:\Program Files\Deltix)
-iex "& { $(irm https://raw.githubusercontent.com/SammyBytes/Deltix-Client/main/scripts/get-deltix-client.ps1) } -System"
+irm https://raw.githubusercontent.com/SammyBytes/Deltix-Client/main/scripts/get-deltix-client.ps1 | iex
+# → $HOME\.local\bin\deltix.exe
 ```
 
-Both flavours verify the asset's published SHA-256 against `Get-FileHash`
-before installing — same integrity guarantee as the bash installer.
-
-Windows (Scoop bucket ships in this repo):
-
-```powershell
-scoop bucket add deltix https://github.com/SammyBytes/deltix-bucket
-scoop install deltix
-```
-
-Or grab the binary for your platform directly from the
-[latest release](https://github.com/SammyBytes/Deltix-Client/releases/latest)
-(Linux/macOS/Windows, x64 and arm64), put it on your `PATH`, and you're done —
-no Bun runtime needed.
+</td>
+</tr>
+<tr>
+<td><b>Any</b></td>
+<td>
 
 ```bash
+# from latest release — no Bun needed
 chmod +x deltix-linux-x64 && sudo mv deltix-linux-x64 /usr/local/bin/deltix
 deltix version
 ```
 
-The first time a command needs Dolt, the client downloads and SHA-256-verifies
-a pinned official Dolt binary into `~/.deltix/bin/` — you never install a
-database server yourself.
+</td>
+</tr>
+</table>
 
-See [`packaging/README.md`](./packaging/README.md) for the distribution
-options (installer, Scoop, and the deferred winget/AUR/Homebrew routes).
+> First command that needs Dolt downloads the pinned `2.3.1` binary to `~/.deltix/bin/` and verifies SHA-256 — you never install a DB yourself.
 
 ---
 
 ## Quick start
 
-The everyday loop mirrors Git. Everything runs inside a project folder that
-holds a `.deltix/config.toml` (like `.git`).
+### A. New project from scratch
 
 ```bash
-deltix configure                 # point at your Deltix-Server (once)
-deltix login                     # masked password prompt (no plaintext in history)
-                                # alt:   deltix login <user> --password=<pass>   (scripts)
+deltix init myapp && deltix start   # Dolt on 127.0.0.1:3307
+# .env
+DATABASE_URL=mysql://root@127.0.0.1:3307/myapp
 
-# Work on an existing repo:
-deltix clone analytics           # fetch the full history into ./analytics
-cd analytics && deltix start     # run the local Dolt engine (MySQL on 127.0.0.1:3306)
-# ...change your data via any MySQL client...
-deltix commit "add customers"    # snapshot locally — author is the logged-in user
-deltix push                      # send commits to the server
-deltix pull                      # bring the server's commits back (merge if needed)
+# create tables with your ORM — Drizzle, Prisma, SeaORM, whatever
+bun run db:migrate
+deltix status        # → users new table (unstaged)
+deltix commit -m "init schema"
+deltix push
 ```
 
-Or start a brand-new repo from an existing MySQL/MariaDB:
+### B. Adopt an existing MySQL
 
 ```bash
-cd ~                          # or wherever you want the project
-deltix init analytics            # bind this folder to repo "analytics"
+deltix init myapp --from mysql://root@127.0.0.1:3306/myapp   # once
+# or: deltix import myapp --from mysql://root@127.0.0.1:3306/myapp
+deltix push          # ships schema + data
 
-# Adopt an existing DB into Deltix in one command:
-deltix import analytics \
-  --from "mysql://reader@127.0.0.1:3306/myapp" \
-  --blobs base64 --continue        # --continue skips rows that violate constraints
-
-deltix push                      # first push ships the imported data
+# switch the app — one line
+DATABASE_URL=mysql://root@127.0.0.1:3307/myapp  # was :3306
 ```
 
-> `--continue` is the safety net for source DBs with a few bad rows
-> (NOT NULL violations, type coercion failures from permissive `sql_mode=''`,
-> etc.) — the import skips them and finishes, instead of aborting the whole
-> table on the first one.
->
-> Use `--no-commit` to preview without committing, `--schema-only` to
-> adopt structure without data, and `--blobs skip` if you don't need BLOB
-> columns for the initial import.
+> `--continue` skips bad rows (NOT NULL, type coercion), `--schema-only` / `--no-commit` for preview, `--blobs base64|skip` for BLOBs. DSN without password prompts masked.
+
+---
+
+## Workflow — the daily loop
+
+<div align="center">
+
+```mermaid
+graph LR
+  A[App on :3307<br/>Drizzle/Prisma] -->|ALTER TABLE| B[Dolt working tree]
+  B -->|deltix status 50ms| C{unstaged?}
+  C -->|deltix commit| D[local commit]
+  D -->|deltix push| E[Deltix-Server :9090]
+  E -->|deltix pull| F[teammates on :3307]
+  B -.->|deltix branch| G[feature/* isolated]
+  G -.->|deltix merge| D
+```
+
+</div>
+
+```bash
+# feature branch — 100% deltix, no dolt needed
+deltix branch create myapp feature-emails
+deltix checkout feature-emails
+
+# change via ORM
+bun run db:migrate
+
+deltix status          # On branch feature-emails / users modified
+deltix diff            # 1 Row Added (local)
+deltix commit -m "add email column"
+
+deltix checkout main   # isolation: main has 4 users, feature has 5
+deltix merge myapp feature-emails   # fast-forward
+deltix push
+```
 
 ---
 
 ## Commands
 
-> Inside a `deltix init`-ed working tree, `<repo>` and `[<repo>]` arguments
-> become **optional** — the cwd project's `repo = ...` line wins. The cli
-> shells below show the explicit forms for clarity.
+<details>
+<summary><b>Setup & auth</b></summary>
 
-### Setup & auth
 | Command | What it does |
 |---|---|
-| `deltix configure` | One-time connection setup (server URL, TLS). Saved to `~/.deltix/config.json`. |
-| `deltix login <user>` | Authenticate; masked password prompt by default. Falls back to `--password=<value>` or `$DELTIX_LOGIN_PASSWORD` for scripts. |
-| `deltix logout` / `deltix whoami` | End / show the active session. |
-| `deltix version` | Client version + (when /status is reachable) server version. |
+| `deltix configure` | One-time setup (server URL, TLS, local port). Saved to `~/.deltix/config.json`. |
+| `deltix login <user>` | Masked prompt. `--password=` or `$DELTIX_LOGIN_PASSWORD` for scripts (warns). |
+| `deltix logout` / `whoami` | End / show session. |
+| `deltix version` | Client + server (`/status` with TLS). |
 
-### Import & export
+</details>
+
+<details>
+<summary><b>Local — git-like</b></summary>
+
 | Command | What it does |
 |---|---|
-| `deltix import <repo> --from <dsn>` | Adopt an existing MySQL/MariaDB into Dolt. `dsn` is `mysql://user@host:port/db`. Supports `--schema-only`, `--data-only` (default both), `--blobs error|base64|skip`, `--continue` (skip bad rows), `--table <t>` (only some tables). When the DSN omits the password, the CLI prompts for it with the input hidden. |
-| `deltix clone <repo>` | Create `./<repo>`, bind it, and pull the full history. |
+| `deltix init <repo>` | Bind folder to repo (`.deltix/` + local Dolt repo). |
+| `deltix start [<repo>]` | Start `dolt sql-server` on `:3307`. Persists port, fails fast if busy, adopts orphans. |
+| `deltix stop` / `status` | Stop / show `running + branch + staged vs unstaged` (wire 50ms). |
+| `deltix checkout <branch> [<repo>]` | Global checkout — `stop → dolt checkout → start` so app + CLI share branch. |
+| `deltix commit <msg> [tables...]` | `dolt add -A` + `commit` (author = logged-in user). |
+| `deltix branch list/create/checkout/delete/current` | Local-first (falls back to local when server has no repo). `branch local` lists both. |
+| `deltix diff [<repo> [<from> <to> | <table>]]` | No refs = working-tree `dolt diff --stat` local. With refs = server diff. |
+| `deltix merge [<repo>] <src> [target]` | Local merge (fast-forward/conflicts), falls back from server. |
+| `deltix log [<repo>]` | Server log. `-n` / `--branch` supported, flags before repo too. |
 
-### Local workflow (git-like)
+</details>
+
+<details>
+<summary><b>Server / sync</b></summary>
+
 | Command | What it does |
 |---|---|
-| `deltix init <repo>` | Bind the current folder to a repo (creates `.deltix/` + local Dolt repo). |
-| `deltix start [<repo>]` | Start the local Dolt SQL server (loopback). Fails fast with a clear error if the configured port is busy. The chosen port is persisted into `~/.deltix/config.json` after the first explicit `DELTIX_LOCAL_PORT=…` so subsequent commands don't need it. |
-| `deltix stop [<repo>]` / `deltix status [<repo>]` | Stop / inspect the local engine. |
-| `deltix commit <message> [tables...]` | Snapshot the working tree. Author is the logged-in user (sanitised, no shell injection). |
-| `deltix push [<repo>]` | Send your unpushed commits to the server. The access token is auto-refreshed on 401, so an idle session does not force a re-login. |
-| `deltix pull [<repo>]` | Fetch + merge the server's commits into your branch. |
-| `deltix pull --abort` | Undo an in-progress conflicted merge. |
-| `deltix fetch [<repo>]` | Update `origin/*` refs without touching your branch. |
-| `deltix branch local [<repo>]` | List local vs remote-tracking branches. |
+| `deltix repo create/list/get` | Provision / list repos. |
+| `deltix push [<repo>]` | Send unpushed commits (schema DDL + CSV rows via `dolt table import`). |
+| `deltix pull [<repo>]` | Fetch + merge `origin/main`. `--abort` to abort conflicts. |
+| `deltix fetch` | Update `origin/*` without touching branch. |
+| `deltix roles` / `sync-prefs` | Per-repo ACL and sync scope. |
 
-### Server / versioning
-| Command | What it does |
-|---|---|
-| `deltix repo create <repo>` / `list` / `get [<repo>]` | Provision and inspect repositories. |
-| `deltix branch list\|current [<repo>]` | List branches / get the current branch name on the server. |
-| `deltix branch create\|checkout\|delete [<repo>] <name>` | Manage server branches. |
-| `deltix merge [<repo>] <source> [target]` | Merge branches on the server. |
-| `deltix log [<repo>]` | Commit history. `-b <name>` and `-n <count>` short flags supported. |
-| `deltix diff [<repo>] <from> <to>` | Row/schema diff between two refs. |
-| `deltix roles list\|grant\|revoke [<repo>] [user] [role]` | Per-repo access control (`reader`/`writer`/`admin`). |
-| `deltix sync-prefs get\|set\|dry-run [<repo>] ...` | Choose which tables version, with FK-closure preview. |
-
----
-
-## How syncing works
-
-- **Push** sends commits (not loose files): the client reads the commits on your
-  branch that aren't on `origin/<branch>`, exports each changed table's schema
-  (DDL) and rows (CSV), and posts them to the server, which recreates them as
-  real Dolt commits with the original message, author, and timestamp.
-  Row loads use `dolt table import -r` against a per-table temp CSV file
-  (one subprocess per table instead of per row), which lets Dolt's own
-  CSV parser handle type coercion — empty strings in `DATETIME` /
-  `NUMERIC` columns land as `NULL`, the historical default MySQL
-  behaviour you'd want anyway.
-- **Pull** is the mirror: it downloads the commits you're missing and applies
-  them locally, fast-forwarding when clean or running a real `dolt merge` when
-  you and the server have diverged (conflicts are reported per table).
-- **Permissions** are enforced by the server, never the client: you need
-  `writer`/`admin` on a repo to push, and creating a new repo requires the
-  `canCreateRepos` permission. A global admin (`isGlobalAdmin=true`) gets
-  implicit `admin` on every repo so they don't have to grant themselves
-  access after provisioning from a different account.
-- **Sessions** are sliding-window: 15-minute access token, 7-day refresh
-  token. The CLI refreshes the access token transparently on 401, so an
-  active operator stays logged in for a week without prompting. Inactivity
-  boot is at 7 days.
-- **TLS is always on.** `deltix configure` can fetch and pin the server's
-  self-signed certificate (trust-on-first-use) for the REST endpoint;
-  connecting over a bare IP works without disabling verification. The
-  `/status` probe used by `deltix version` threads the same CA
-  options through, so the probe succeeds whenever data calls do.
-
----
-
-## Configuration
-
-`deltix configure` is the human-friendly path and the recommended way
-to set up Deltix-Client — it prompts for the server URL, the local Dolt
-SQL port, and TLS options, and persists the result to
-`~/.deltix/config.json`. Env vars below are for CI / automation only;
-`deltix configure` should be enough for every interactive use case.
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `DELTIX_SERVER_URL` | `http://127.0.0.1:9090` | REST control plane. Persisted via `deltix configure`. |
-| `DELTIX_HTTP_TLS_CA_PATH` | — | CA to trust a self-signed server. Persisted via `deltix configure`. |
-| `DELTIX_HTTP_TLS_SERVER_NAME_OVERRIDE` | — | SNI name when connecting by IP. Persisted via `deltix configure`. |
-| `DELTIX_LOCAL_HOST` / `DELTIX_LOCAL_PORT` | `127.0.0.1` / `3306` | Local Dolt SQL server. Both are persisted via `deltix configure`, so a host with a pre-installed MySQL/MariaDB on 3306 only types the new port once. |
-| `DELTIX_HOME` | `~/.deltix` | Root for local state + Dolt binary. |
-| `DELTIX_DOLT_VERSION` / `DELTIX_DOLT_BIN_PATH` | `2.3.1` / — | Pinned Dolt version / preinstalled binary. |
-| `DELTIX_IMPORT_URL` | — | Optional default for `deltix import --from`. |
-| `DELTIX_LOGIN_PASSWORD` | — | Password for non-interactive `deltix login`. The CLI warns when this is used. |
+</details>
 
 ---
 
 ## Architecture
 
-A modular monolith organized by **bounded contexts** under `src/contexts/*`
-(no hexagonal layering). Process spawning is isolated in `src/acl/dolt-exec.ts`
-(argv arrays only — never a shell string); the binary is always resolved through
-`binary-manager` and integrity-checked.
+```
+cli/        → parsing + delegation, no logic
+  ↓
+ports/      → interfaces (DoltSqlPort, LocalRepoPort)
+  ↓
+core/       → pure functions (table-name, csv)
+adapters/   → DoltMysqlAdapter (wire, fast) / DoltCliAdapter (fallback)
+contexts/   → stateful orchestration, depends on ports (never adapters directly)
+```
 
-| Context | Responsibility |
-|---|---|
-| `config` | `deltix configure` + persisted connection settings, including the auto-persisted `localPort`. |
-| `session` | Login, auto-refresh, masked-password prompts, local credential storage (0600). |
-| `local-project` | The `.deltix/config.toml` binding; per-checkout state; the `resolveRepo`/`resolveServerIdentity` autodetect chain used by every data command. |
-| `binary-manager` | Resolve/download/verify the pinned Dolt binary. |
-| `mysql-embedded` | Local `dolt sql-server` lifecycle (`start`/`stop`/`status`) with log-file redirect (no SIGPIPE), fail-fast on port collisions. |
-| `import` | `deltix import` end-to-end: parse DSN, mask password, push masked prompt, schema-only / data-only, `--continue`, blob policies, JSON-column serialisation. |
-| `versioning-local` | Local Dolt operations: commit, push export, pull apply, merge, branches, `origin/*` tracking. Commits are tagged with the logged-in user (sanitised). |
-| `versioning` | REST parity with the server: repos, branches, merge, log/diff, roles, sync-prefs, push/pull-commits. |
+No local DB of its own — Dolt is the DB. No Turso. Adding `bun:sqlite` later would be `BunSQLiteAdapter implements DoltSqlPort`, zero context change.
 
-Full engineering rules (architecture, security, testing, logging) live in
-[`.github/copilot-instructions.md`](./.github/copilot-instructions.md).
+Full rules in [`.github/copilot-instructions.md`](./.github/copilot-instructions.md) — see [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for the one-page version.
 
 ---
 
-## Security
+## Stack & security
 
-- **Argv arrays only** for every subprocess (Dolt, mysql, everything).
-  No `shell: true`, no string interpolation, ever. Input fields that flow
-  into `--author` or Dolt config are sanitised to `[A-Za-z0-9_.-]` to
-  prevent CLI flag injection.
-- **Server-trusted TLS only.** The client trusts the configured CA / SNI
-  override via `buildFetchTlsOptions(...)`; never via the global
-  `NODE_TLS_REJECT_UNAUTHORIZED=0`.
-- **Local credentials are 0600** at `~/.deltix/credentials.json`, never
-  shared, never logged. Refresh tokens are rotated server-side on every
-  `/refresh` call.
-- **Secret prompts are masked** for both `deltix login` and `deltix import`
-  by default (TTY raw-mode + `*` per keystroke). Passing secrets on the
-  command line is permitted but triggers an explicit warning so the
-  operator knows the secret just hit shell history / `ps`.
+| | |
+|---|---|
+| **Engine** | Dolt `2.3.1` (MySQL wire, branch/merge/diff) |
+| **Client** | Bun 1.4 + TypeScript, `consola`, `mysql2`, `zod` — single binary `bun build --compile` |
+| **Server** | Bun + Hono REST `:9090`, JWT Ed25519 |
+| **Security** | `argv` arrays only (no shell), author sanitised `[A-Za-z0-9_.-]`, TLS trust-on-first-use, creds `0600`, secrets masked |
 
-See [`SECURITY.md`](./SECURITY.md) for the supported-version policy and how to
-report vulnerabilities privately.
+---
+
+<div align="center">
+
+<img src="https://capsule-render.vercel.app/api?type=waving&color=0:111827,100:1f2937&height=120&section=footer&text=Ship%20schema%20with%20confidence&fontSize=20&fontColor=ffffff" width="100%" />
+
+**MIT** — see [LICENSE](./LICENSE) • [CHANGELOG](./CHANGELOG.md) • [SECURITY](./SECURITY.md)
+
+`DATABASE_URL=:3307` and you are versioned.
+
+</div>
