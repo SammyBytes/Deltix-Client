@@ -3,6 +3,8 @@ import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runDoltCommand } from '../../acl/dolt-exec';
+import { parseCsvLine } from '../../core/csv';
+import { escapeSql, SAFE_TABLE_RE, sanitizeAuthor, sqlLiteral } from '../../core/table-name';
 import type { BinaryManager } from '../binary-manager';
 import type { LocalServerIdentity } from '../mysql-embedded';
 import { computeLocalDataDir } from '../mysql-embedded';
@@ -81,51 +83,6 @@ interface DoltLogRow {
  */
 function remoteRefName(branch: string): string {
   return `origin/${branch}`;
-}
-
-function escapeSql(value: string): string {
-  return value.replace(/'/g, "''");
-}
-
-const SAFE_TABLE_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
-
-function sanitizeAuthor(name: string): string {
-  return name.replace(/[^a-zA-Z0-9_.-]/g, '_');
-}
-
-function sqlLiteral(value: string): string {
-  return `'${value.replace(/'/g, "''")}'`;
-}
-
-/** Parse one CSV line (handles quoted fields and doubled quotes). */
-function parseCsvLine(line: string): string[] {
-  const result: string[] = [];
-  let current = '';
-  let inQuotes = false;
-  for (let i = 0; i < line.length; i++) {
-    const char = line[i] ?? '';
-    if (inQuotes) {
-      if (char === '"') {
-        if (line[i + 1] === '"') {
-          current += '"';
-          i++;
-        } else {
-          inQuotes = false;
-        }
-      } else {
-        current += char;
-      }
-    } else if (char === '"') {
-      inQuotes = true;
-    } else if (char === ',') {
-      result.push(current);
-      current = '';
-    } else {
-      current += char;
-    }
-  }
-  result.push(current);
-  return result;
 }
 
 export class VersioningLocalService {
