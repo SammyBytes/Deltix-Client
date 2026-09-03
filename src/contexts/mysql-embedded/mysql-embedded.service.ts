@@ -360,7 +360,8 @@ export class MysqlEmbeddedService {
           });
           await conn.query('SELECT 1');
           await conn.end();
-          return { repo: id.repo, running: true, port: this.localPort, dataDir, pid: -1 };
+          const pid = (await this.findPidByPort(this.localHost, this.localPort)) ?? -1;
+          return { repo: id.repo, running: true, port: this.localPort, dataDir, pid };
         } catch {
           // Port belongs to another server or not serving this DB
         }
@@ -369,6 +370,7 @@ export class MysqlEmbeddedService {
     }
 
     let alive = true;
+    let pid = state.pid;
     if (state.pid === -1) {
       // Adopted orphan has no recorded PID — check liveness via the port
       // and MySQL wire protocol instead of `kill(-1)` which always throws.
@@ -385,6 +387,21 @@ export class MysqlEmbeddedService {
           await conn.query('SELECT 1');
           await conn.end();
           alive = true;
+          // Best-effort: learn the real PID so `status`/`stop` can act on the
+          // process directly instead of reporting -1 forever.
+          const foundPid = await this.findPidByPort(this.localHost, this.localPort);
+          if (foundPid && foundPid > 0) {
+            pid = foundPid;
+            const updated: RunState = {
+              repo: state.repo,
+              pid: foundPid,
+              port: state.port,
+              dataDir: state.dataDir,
+              startedAt: state.startedAt,
+            };
+            if (state.projectRoot !== undefined) updated.projectRoot = state.projectRoot;
+            await this.writeState(updated);
+          }
         } catch {
           alive = false;
         }
@@ -413,7 +430,7 @@ export class MysqlEmbeddedService {
     return {
       repo: id.repo,
       running: alive,
-      pid: state.pid,
+      pid,
       port: state.port,
       dataDir: state.dataDir,
     };

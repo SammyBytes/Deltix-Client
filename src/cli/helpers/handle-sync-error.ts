@@ -1,3 +1,18 @@
+import { NoProjectError } from '../../contexts/local-project';
+import { NoActiveSessionError } from '../../contexts/session';
+import {
+  InsufficientRoleError,
+  RepoNotFoundError,
+  ValidationError,
+  VersioningAuthenticationError,
+} from '../../contexts/versioning';
+import {
+  CommitDataDirNotFoundError,
+  LocalRepoInitError,
+  PushError,
+} from '../../contexts/versioning-local';
+import { printError } from '../output';
+
 export function handleSyncError(err: unknown, action: string): number {
   if (
     err instanceof NoProjectError ||
@@ -8,7 +23,6 @@ export function handleSyncError(err: unknown, action: string): number {
     err instanceof RepoNotFoundError ||
     err instanceof ValidationError
   ) {
-    // eslint-disable-next-line @biomejs/biome/no-unused-static-method
     printError(String(err.message));
     return 1;
   }

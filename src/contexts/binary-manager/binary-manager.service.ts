@@ -168,7 +168,7 @@ function defaultArch(): 'arm64' | 'amd64' {
   return process.arch === 'arm64' ? 'arm64' : 'amd64';
 }
 
-function defaultHomeDir(): string {
+export function defaultHomeDir(): string {
   // Use os.homedir() — on Windows `process.env.HOME` is typically undefined
   // (the platform uses USERPROFILE), which previously produced a *relative*
   // `.deltix/...` path and made the resolved binary unfindable.

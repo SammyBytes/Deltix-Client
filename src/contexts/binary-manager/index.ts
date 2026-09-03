@@ -11,6 +11,7 @@ export {
   BinaryManager,
   type BinaryManagerDeps,
   DOLT_VERSION,
+  defaultHomeDir,
   doltReleaseUrl,
 } from './binary-manager.service';
 export type { DoltDownloader } from './download';

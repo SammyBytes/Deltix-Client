@@ -1,6 +1,7 @@
 import { createVersioningService } from '../../contexts/versioning';
 import { newLocalService } from '../helpers';
 import { handleSyncError } from '../helpers/handle-sync-error';
+import { resolveServerIdentity } from '../helpers/repo';
 import { printInfo, printSuccess } from '../output';
 import { withSpinner } from '../spinner';
 

@@ -1,5 +1,10 @@
+import {
+  createSessionService,
+  InvalidCredentialsError,
+  NoActiveSessionError,
+} from '../../contexts/session';
 import { flagValue } from '../helpers/args';
-import { printError, printInfo, printSuccess } from '../output';
+import { printError, printInfo, printSuccess, promptSecret } from '../output';
 
 export async function runLogin(args: string[]): Promise<number> {
   const [username, passwordArg] = args;
