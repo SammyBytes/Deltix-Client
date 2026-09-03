@@ -62,7 +62,7 @@ import {
   LocalRepoInitError,
   VersioningLocalService,
 } from '../contexts/versioning-local';
-import { getClientBuildInfo } from '../shared/build-info';
+
 import {
   DEFAULT_BRANCH,
   DEFAULT_DOLT_PORT,
@@ -70,10 +70,10 @@ import {
   DEFAULT_SERVER_PORT,
   DEFAULT_SERVER_URL,
 } from '../shared/constants';
-import { applyPersistedConfigDefaults, loadEnv } from '../shared/env';
-import { buildFetchTlsOptions } from '../shared/http-tls';
+import { applyPersistedConfigDefaults } from '../shared/env';
 import { runLogin, runLogout, runWhoami } from './commands/auth';
 import { runPush } from './commands/push';
+import { runVersion } from './commands/version';
 import {
   printError,
   printInfo,
@@ -1197,61 +1197,6 @@ async function autoFetchAndTrustCertificate(
   await writeFile(DEFAULT_TRUSTED_CERT_PATH, fetched.pem, { mode: 0o600 });
   printSuccess(`Certificate saved to ${DEFAULT_TRUSTED_CERT_PATH}`);
   return { path: DEFAULT_TRUSTED_CERT_PATH, dnsNames: fetched.dnsNames };
-}
-
-async function runVersion(): Promise<number> {
-  const clientInfo = await getClientBuildInfo();
-  printInfo('Deltix-Client');
-  printKeyValues({
-    version: clientInfo.version,
-    commit: clientInfo.commit,
-  });
-
-  const env = loadEnv();
-  // Same TLS config the data API uses — otherwise the probe fails with
-  // "self signed certificate" against a TLS server with a self-signed
-  // cert even though /api/v1/* requests succeed, just because the probe
-  // passes through raw `fetch()` without a CA override.
-  const tls = buildFetchTlsOptions({
-    caCertPath: env.DELTIX_HTTP_TLS_CA_PATH,
-    serverNameOverride: env.DELTIX_HTTP_TLS_SERVER_NAME_OVERRIDE,
-  });
-  // /status is a best-effort probe — the actual server isn't down just
-  // because the status endpoint happened to time out or return non-2xx
-  // (the API endpoints under /api/v1/* are a separate surface and were
-  // visibly working). We only show the server section when /status
-  // succeeds, otherwise we stay quiet rather than shouting "unreachable"
-  // when commands still work.
-  let serverShown = false;
-  try {
-    const response = await fetch(new URL('/status', env.DELTIX_SERVER_URL), {
-      signal: AbortSignal.timeout(3000),
-      ...(tls ? { tls } : {}),
-    });
-    if (response.ok) {
-      const server = (await response.json()) as {
-        version?: string;
-        commit?: string;
-        nodeEnv?: string;
-      };
-      printInfo(`Deltix-Server (${env.DELTIX_SERVER_URL})`);
-      printKeyValues({
-        version: server.version ?? 'unknown',
-        commit: server.commit ?? 'unknown',
-        env: server.nodeEnv ?? 'unknown',
-      });
-      serverShown = true;
-    }
-  } catch {
-    // Swallowed — fall through to the explanation below.
-  }
-  if (!serverShown) {
-    printInfo(
-      `(server version probe unavailable; run any data command to confirm connectivity — ${env.DELTIX_SERVER_URL})`,
-    );
-  }
-
-  return 0;
 }
 
 async function runInit(args: string[]): Promise<number> {

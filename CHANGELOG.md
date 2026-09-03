@@ -9,6 +9,30 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.7.28] - 2026-09-03
+
+**In plain terms:** A software-quality checkpoint — the code that developers use every day got cleaner on the inside with no change to how the tool works from the outside. The command line was reorganised into small, separate building blocks so future changes are easier to test and less likely to introduce bugs, and the automatic quality gate (style checks) now runs clean. Nothing new for end users to learn.
+
+### Changed
+
+- **Started breaking the CLI into modules (v0.8 preparation).** `src/cli/index.ts` no longer holds every command: `login`/`logout`/`whoami` moved to `src/cli/commands/auth.ts`, `push` to `src/cli/commands/push.ts`, `version` to `src/cli/commands/version.ts`. Shared pure helpers extracted to `src/cli/helpers/` (`args.ts`, `repo.ts`, `newLocalService.ts`, `handle-sync-error.ts`). Commands now depend on `ports/`, not on `mysql2`/`runDoltCommand` directly.
+
+### Fixed
+
+- **CI quality gate (Biome) passes again.** Previously the split broke `bun run lint` in 8 places:
+  - `src/cli/commands/push.ts`: dropped unused imports (`printError`, `printInfo`, and six error classes that only the old entrypoint used).
+  - `src/acl/versioning-api-adapter.ts`: replaced string concatenation with a template literal for the auth header (`Bearer ${token}`).
+  - `src/contexts/versioning-local/versioning-local.service.ts`: removed two dead private methods (`checkoutViaMysql`, `checkoutBranchViaMysqlOrCli`) that Dolt CLI checkout (PR #54) already superseded.
+  - `src/shared/env.ts`, `tests/unit/acl/certificate-bootstrap.test.ts`, `tests/unit/session/session.service.test.ts`: dropped unused imports/parameters.
+  - `src/cli/helpers/*`: organised imports and reformatted (Biome safe fixes).
+
+### Tests
+
+- `bun run lint` exits 0 (only low-severity complexity warnings remain, tracked for the ongoing v0.8 split).
+- Unit suite passes: 128 tests, 0 failures.
+- CI run `33777461959` on `main` fully green: Lint (Biome), Unit tests, Integration tests (against real Dolt), Smoke tests.
+- Local sanity build of the compiled binary for `bun-linux-x64`; `deltix version` reports client `0.7.27` (this release `0.7.28`), commit `8894584`.
+
 ## [0.7.27] - 2026-08-31
 
 **In plain terms:** Big cleanup for maintainability — no more magic numbers, all docs in English, and pretty animated demos.

@@ -1,9 +1,9 @@
-import { VersioningLocalService } from '../../contexts/versioning-local';
 import { BinaryManager } from '../../contexts/binary-manager';
+import { VersioningLocalService } from '../../contexts/versioning-local';
 
 export function newLocalService(
   homeDir?: string,
-  binaryManager?: BinaryManager
+  binaryManager?: BinaryManager,
 ): VersioningLocalService {
   const dir = homeDir ?? process.env.DELTIX_HOME ?? '/home/sammy/.deltix';
   const bm = binaryManager ?? new BinaryManager();

@@ -533,7 +533,7 @@ export class VersioningApiAdapter {
       return await fetch(this.serverUrl + path, {
         method: options.method,
         headers: {
-          authorization: 'Bearer ' + accessToken,
+          authorization: `Bearer ${accessToken}`,
           ...(options.body ? { 'content-type': 'application/json' } : {}),
         },
         ...(options.body ? { body: JSON.stringify(options.body) } : {}),
