@@ -30,9 +30,12 @@ deltix commit -m "add email column"
 deltix push          # team is up to date
 ```
 
-<img src="https://raw.githubusercontent.com/SammyBytes/Deltix-Client/main/assets/demo.gif" width="720" alt="deltix demo — status → commit → push" />
+<img src="./assets/demo-quickstart.gif" width="720" alt="deltix quick start — init → start → status" />
+<img src="./assets/demo-status.gif" width="720" alt="deltix status — staged vs unstaged" />
+<img src="./assets/demo-branch.gif" width="720" alt="deltix branch — create → checkout → list" />
+<img src="./assets/demo-drizzle.gif" width="720" alt="Drizzle + Deltix — migrate → status → commit" />
 
-<sub>Replace with your own `assets/demo.gif` — record with `vhs` or `asciinema`.</sub>
+<sub>Isolated demos — no sensitive data, repo `demo-hello` in `/tmp`, re-record with `vhs assets/tapes/*.tape`.</sub>
 
 </div>
 

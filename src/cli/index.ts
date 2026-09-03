@@ -1641,7 +1641,7 @@ async function runStatus(args: string[]): Promise<number> {
     }
 
     // Git-like working-tree status (staged vs unstaged) — the missing piece
-    // for the "ORM writes to Dolt" workflow. The app points to :DEFAULT_DOLT_PORT, migrations
+    // for the "ORM writes to Dolt" workflow. The app points to :3307, migrations
     // land in Dolt's working tree, and `deltix status` tells the operator what
     // changed without needing to re-import.
     // Fast path: when the server is running, query via MySQL wire protocol
@@ -1658,7 +1658,7 @@ async function runStatus(args: string[]): Promise<number> {
       if (ws.clean) {
         printInfo('Working tree clean — nothing to commit.');
         printInfo(
-          'Run a migration against Dolt (:DEFAULT_DOLT_PORT) and re-run `deltix status` to see changes.',
+          `Run a migration against Dolt (:${status.port ?? DEFAULT_DOLT_PORT}) and re-run \`deltix status\` to see changes.`,
         );
       } else {
         if (ws.staged.length > 0) {
