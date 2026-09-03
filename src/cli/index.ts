@@ -38,7 +38,6 @@ import {
 } from '../contexts/mysql-embedded';
 import {
   createSessionService,
-  InvalidCredentialsError,
   NoActiveSessionError,
   ServerUnreachableError,
 } from '../contexts/session';
@@ -61,8 +60,6 @@ import {
   CommitEmptyError,
   CommitError,
   LocalRepoInitError,
-  PushEmptyError,
-  PushError,
   VersioningLocalService,
 } from '../contexts/versioning-local';
 import { getClientBuildInfo } from '../shared/build-info';
@@ -72,11 +69,11 @@ import {
   DEFAULT_MYSQL_PORT,
   DEFAULT_SERVER_PORT,
   DEFAULT_SERVER_URL,
-  TIMEOUT,
-  USAGE,
 } from '../shared/constants';
 import { applyPersistedConfigDefaults, loadEnv } from '../shared/env';
 import { buildFetchTlsOptions } from '../shared/http-tls';
+import { runLogin, runLogout, runWhoami } from './commands/auth';
+import { runPush } from './commands/push';
 import {
   printError,
   printInfo,
@@ -123,183 +120,6 @@ function splitPositionalsAndFlags(args: string[]): {
     }
   }
   return { positionals, flags };
-}
-
-async function runLogin(args: string[]): Promise<number> {
-  const [username, passwordArg] = args;
-  if (!username) {
-    printError(
-      'Usage: deltix login <username> [password]  (interactive prompt when password is omitted)',
-    );
-    return 1;
-  }
-
-  // Resolve the secret with a clear preference order:
-  //   1. --password=<value>  → explicit, for scripts that know what they're
-  //                            doing and accept the shell-history exposure.
-  //   2. positional arg      → kept for backward compatibility, but warn
-  //                            so the operator knows it just hit ~/.zsh_history.
-  //   3. TTY prompt          → masked (the safe default).
-  //   4. DELTIX_LOGIN_PASSWORD env var → for non-interactive scripts; warn
-  //                            once at use site because 'ps' leaks env.
-  let password = flagValue(args, 'password') ?? passwordArg ?? process.env.DELTIX_LOGIN_PASSWORD;
-  let passwordSource: 'flag' | 'argv' | 'env' | 'prompt' | null = password
-    ? password === passwordArg
-      ? 'argv'
-      : password === process.env.DELTIX_LOGIN_PASSWORD
-        ? 'env'
-        : 'flag'
-    : null;
-
-  if (!password && process.stdin.isTTY) {
-    password = await promptSecret(`Password for ${username}`);
-    passwordSource = 'prompt';
-  }
-
-  if (!password) {
-    printError(
-      'No password provided. Pass it as an argument, set DELTIX_LOGIN_PASSWORD, or run interactively.',
-    );
-    return 1;
-  }
-
-  if (passwordSource === 'argv') {
-    printInfo('Note: password passed as a positional argument. It is now in your shell history.');
-  } else if (passwordSource === 'env') {
-    printInfo(
-      'Note: password read from DELTIX_LOGIN_PASSWORD. Other processes on this host can read it via /proc.',
-    );
-  }
-
-  try {
-    await createSessionService().login(username, password);
-    printSuccess(`Logged in as ${username}`);
-    return 0;
-  } catch (err) {
-    if (err instanceof InvalidCredentialsError) {
-      printError('Login failed: invalid credentials');
-      return 1;
-    }
-    printError(`Login failed: ${String(err)}`);
-    return 1;
-  }
-}
-
-async function runLogout(): Promise<number> {
-  try {
-    await createSessionService().logout();
-    printSuccess('Logged out');
-    return 0;
-  } catch (err) {
-    if (err instanceof NoActiveSessionError) {
-      printError('Not logged in');
-      return 1;
-    }
-    printError(`Logout failed: ${String(err)}`);
-    return 1;
-  }
-}
-
-async function runWhoami(): Promise<number> {
-  const status = await createSessionService().status();
-  if (status.loggedIn) {
-    printInfo(`Logged in as ${status.username}`);
-  } else {
-    printInfo('Not logged in');
-  }
-  return 0;
-}
-
-async function runPush(args: string[]): Promise<number> {
-  const [repoArg] = args;
-  const identity = await resolveServerIdentity(repoArg);
-  if (!identity) {
-    return 1;
-  }
-
-  try {
-    const localService = await newLocalService();
-
-    const branch = DEFAULT_BRANCH;
-    const commits = await localService.getUnpushedCommits(identity, branch);
-    const result = await createVersioningService().pushCommits(identity.repo, commits);
-
-    // Advance the remote-tracking ref so the next push only sends new work.
-    const head = await localService.getBranchHead(identity, branch);
-    if (head) {
-      await localService.advanceRemoteRef(identity, branch, head);
-    }
-
-    printSuccess(`Pushed ${commits.length} commit(s) to ${identity.repo}`, {
-      commitHash: result.commitHash,
-      tables: commits.reduce((sum, c) => sum + c.tables.length, 0),
-    });
-    return 0;
-  } catch (err) {
-    if (err instanceof NoProjectError) {
-      printError(String(err.message));
-      return 1;
-    }
-    if (err instanceof CommitDataDirNotFoundError) {
-      printError(String(err.message));
-      return 1;
-    }
-    if (err instanceof LocalRepoInitError) {
-      printError(String(err.message));
-      return 1;
-    }
-    if (err instanceof PushEmptyError) {
-      printInfo(String(err.message));
-      return 0;
-    }
-    if (err instanceof PushError) {
-      printError(String(err.message));
-      return 1;
-    }
-    if (err instanceof VersioningAuthenticationError) {
-      printError('Authentication failed. Run `deltix login` first.');
-      return 1;
-    }
-    if (err instanceof InsufficientRoleError) {
-      printError(String(err.message));
-      return 1;
-    }
-    if (err instanceof RepoNotFoundError) {
-      printError(String(err.message));
-      return 1;
-    }
-    printError(`Push failed: ${String(err)}`);
-    return 1;
-  }
-}
-
-async function newLocalService(): Promise<VersioningLocalService> {
-  const { BinaryManager } = await import('../contexts/binary-manager');
-  return new VersioningLocalService({
-    homeDir: process.env.DELTIX_HOME ?? join(homedir(), '.deltix'),
-    binaryManager: new BinaryManager(),
-  });
-}
-
-function handleSyncError(err: unknown, action: string): number {
-  if (
-    err instanceof NoProjectError ||
-    err instanceof CommitDataDirNotFoundError ||
-    err instanceof LocalRepoInitError ||
-    err instanceof PushError ||
-    err instanceof InsufficientRoleError ||
-    err instanceof RepoNotFoundError ||
-    err instanceof ValidationError
-  ) {
-    printError(String(err.message));
-    return 1;
-  }
-  if (err instanceof VersioningAuthenticationError || err instanceof NoActiveSessionError) {
-    printError('Authentication failed. Run `deltix login` first.');
-    return 1;
-  }
-  printError(`${action}: ${String(err)}`);
-  return 1;
 }
 
 async function runPull(args: string[]): Promise<number> {
@@ -882,7 +702,7 @@ async function runMerge(args: string[]): Promise<number> {
 
   try {
     const merge = await createVersioningService().merge(repo, sourceBranch, targetBranch);
-    printSuccess(`Merge completed for ${repo}` + (merge.fastForward ? ' (fast-forward)' : ''), {
+    printSuccess(`Merge completed for ${repo}${merge.fastForward ? ' (fast-forward)' : ''}`, {
       source: merge.sourceBranch,
       target: merge.targetBranch,
       commitHash: merge.commitHash,
