@@ -7,10 +7,11 @@
  * — add new variables here, never read `Bun.env` ad-hoc elsewhere.
  */
 import { z } from 'zod';
+import { DEFAULT_DOLT_PORT, DEFAULT_MYSQL_PORT, DEFAULT_SERVER_URL } from './constants';
 
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
-  DELTIX_SERVER_URL: z.string().url().default('http://127.0.0.1:9090'),
+  DELTIX_SERVER_URL: z.string().url().default(DEFAULT_SERVER_URL),
   DELTIX_CREDENTIALS_PATH: z.string().min(1).optional(),
   // Path to a CA certificate to trust for HTTP (REST) calls to the control
   // plane — login, push/pull ticket issuance, versioning API. Required
@@ -39,7 +40,7 @@ const envSchema = z.object({
   // via `deltix configure` so host names with a pre-installed MySQL/MariaDB
   // can pick a free port without exporting env vars by hand.
   DELTIX_LOCAL_HOST: z.string().min(1).default('127.0.0.1'),
-  DELTIX_LOCAL_PORT: z.coerce.number().int().positive().default(3306),
+  DELTIX_LOCAL_PORT: z.coerce.number().int().positive().default(DEFAULT_MYSQL_PORT),
 });
 
 export type Env = z.infer<typeof envSchema>;

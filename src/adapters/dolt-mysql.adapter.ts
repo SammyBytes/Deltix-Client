@@ -1,8 +1,9 @@
 /**
- * Adapter MySQL wire — habla a `dolt sql-server` en :3307 vía mysql2.
- * Rápido (~50ms), no spawnea procesos. Usado cuando el server local está vivo.
+ * MySQL wire adapter — talks to `dolt sql-server` on :3307 via mysql2.
+ * Fast (~50ms), no spawn. Used when local server is running.
  */
 import type { DoltSqlPort } from '../ports/dolt-sql.port';
+import { TIMEOUT } from '../shared/constants';
 
 export class DoltMysqlAdapter implements DoltSqlPort {
   constructor(
@@ -19,7 +20,7 @@ export class DoltMysqlAdapter implements DoltSqlPort {
         port: this.port,
         user: 'root',
         database: this.database,
-        connectTimeout: 800,
+        connectTimeout: TIMEOUT.MYSQL_CONNECT_FAST,
       });
       await conn.query('SELECT 1');
       await conn.end();
@@ -36,7 +37,7 @@ export class DoltMysqlAdapter implements DoltSqlPort {
       port: this.port,
       user: 'root',
       database: this.database,
-      connectTimeout: 1500,
+      connectTimeout: TIMEOUT.MYSQL_CONNECT_SLOW,
     });
     try {
       const [rows] = await conn.query(sql);
@@ -53,7 +54,7 @@ export class DoltMysqlAdapter implements DoltSqlPort {
       port: this.port,
       user: 'root',
       database: this.database,
-      connectTimeout: 1500,
+      connectTimeout: TIMEOUT.MYSQL_CONNECT_SLOW,
     });
     try {
       await conn.query(sql);

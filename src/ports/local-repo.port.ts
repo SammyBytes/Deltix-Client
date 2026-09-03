@@ -9,8 +9,8 @@ export interface LocalRepoIdentity {
 }
 
 /**
- * Puerto de repo local — lo que el CLI necesita, no cómo se hace.
- * Implementado por `VersioningLocalService` delegando a `DoltSqlPort`.
+ * Local repo port — what the CLI needs, not how it is done.
+ * Implemented by `VersioningLocalService` via `DoltSqlPort`.
  */
 export interface LocalRepoPort {
   getStatus(id: LocalRepoIdentity): Promise<LocalStatus>;

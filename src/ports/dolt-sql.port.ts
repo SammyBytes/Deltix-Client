@@ -1,16 +1,16 @@
 /**
- * Puerto SQL contra Dolt — abstracción sobre la implementación.
- * Dos adapters: `DoltMysqlAdapter` (wire mysql2 a :3307, rápido) y
- * `DoltCliAdapter` (dolt sql -q, fallback). Los contexts no importan
- * mysql2 ni runDoltCommand directo.
+ * SQL port for Dolt — abstraction over the implementation.
+ * Two adapters: `DoltMysqlAdapter` (wire mysql2 to :3307, fast) and
+ * `DoltCliAdapter` (dolt sql -q, fallback). Contexts do not import
+ * mysql2 or runDoltCommand directly.
  */
 export interface DoltSqlPort {
-  /** SELECT-like, devuelve filas tipadas */
+  /** SELECT-like, returns typed rows */
   query<T extends Record<string, unknown>>(sql: string): Promise<T[]>;
-  /** DDL/DML sin retorno (`CREATE`, `CALL DOLT_*` que no devuelve) */
+  /** DDL/DML with no return (`CREATE`, `CALL DOLT_*` that returns nothing) */
   exec(sql: string): Promise<void>;
-  /** CALL proc(args) — para DOLT_BRANCH / CHECKOUT / COMMIT / MERGE */
+  /** CALL proc(args) — for DOLT_BRANCH / CHECKOUT / COMMIT / MERGE */
   call(proc: string, args: string[]): Promise<unknown>;
-  /** ¿Está disponible? (wire) */
+  /** Is it available? (wire) */
   isAvailable(): Promise<boolean>;
 }

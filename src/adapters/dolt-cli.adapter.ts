@@ -1,10 +1,11 @@
 /**
- * Adapter CLI — habla a `dolt` binario vía `runDoltCommand`.
- * Lento (~3s/spawn) pero funciona aunque el sql-server esté apagado.
- * Fallback del `DoltMysqlAdapter`.
+ * CLI adapter — talks to `dolt` binary via `runDoltCommand`.
+ * Slow (~3s/spawn) but works even when sql-server is down.
+ * Fallback for `DoltMysqlAdapter`.
  */
 import { runDoltCommand } from '../acl/dolt-exec';
 import type { DoltSqlPort } from '../ports/dolt-sql.port';
+import { TIMEOUT } from '../shared/constants';
 
 export class DoltCliAdapter implements DoltSqlPort {
   constructor(
@@ -13,14 +14,14 @@ export class DoltCliAdapter implements DoltSqlPort {
   ) {}
 
   async isAvailable(): Promise<boolean> {
-    return true; // CLI siempre disponible si el binario existe
+    return true; // CLI always available if binary exists
   }
 
   async query<T extends Record<string, unknown>>(sql: string): Promise<T[]> {
     const result = await runDoltCommand(
       this.binaryPath,
       ['--data-dir', this.dataDir, 'sql', '-q', sql, '-r', 'json'],
-      { timeoutMs: 15_000 },
+      { timeoutMs: TIMEOUT.DOLT_DIFF_STAT },
     );
     if (result.exitCode !== 0) throw new Error(result.stderr.trim() || result.stdout.trim());
     const trimmed = result.stdout.trim();
@@ -32,7 +33,7 @@ export class DoltCliAdapter implements DoltSqlPort {
     const result = await runDoltCommand(
       this.binaryPath,
       ['--data-dir', this.dataDir, 'sql', '-q', sql],
-      { timeoutMs: 10_000 },
+      { timeoutMs: TIMEOUT.DOLT_BRANCH },
     );
     if (result.exitCode !== 0) throw new Error(result.stderr.trim() || result.stdout.trim());
   }
