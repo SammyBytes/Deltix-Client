@@ -40,6 +40,7 @@ import {
   createSessionService,
   InvalidCredentialsError,
   NoActiveSessionError,
+  ServerUnreachableError,
 } from '../contexts/session';
 import {
   BranchAlreadyExistsError,
@@ -639,22 +640,54 @@ async function runBranch(args: string[]): Promise<number> {
     return branchUsage();
   }
 
+  // Helper: try server, fallback to local Dolt when repo not on server
+  // (daily workflow is local-first: `deltix branch create` should work
+  // even before `deltix push`).
+  const tryLocalFallback = async (
+    err: unknown,
+    fn: () => Promise<number>,
+  ): Promise<number | null> => {
+    if (
+      err instanceof RepoNotFoundError ||
+      err instanceof ServerUnreachableError ||
+      err instanceof VersioningAuthenticationError ||
+      err instanceof NoActiveSessionError
+    ) {
+      try {
+        return await fn();
+      } catch (localErr) {
+        return handleVersioningError(localErr, 'Branch command failed (local fallback)');
+      }
+    }
+    return null;
+  };
+
   try {
     const service = createVersioningService();
     switch (action) {
       case 'list': {
         const repo = await resolveRepo(repoArg, 'Usage: deltix branch list <repo>');
         if (!repo) return 1;
-        const branches = await service.listBranches(repo);
-        // Flatten {name, isCurrent} into readable columns with a '*' marker
-        // for the active branch, instead of letting printTable serialise the
-        // object as a JSON blob ("{\"name\":\"main\",\"isCurrent\":true}").
-        printTable(
-          branches.map((branch) => ({
-            branch: branch.name + (branch.isCurrent ? '  *' : ''),
-          })),
-        );
-        return 0;
+        try {
+          const branches = await service.listBranches(repo);
+          printTable(
+            branches.map((branch) => ({
+              branch: branch.name + (branch.isCurrent ? '  *' : ''),
+            })),
+          );
+          return 0;
+        } catch (err) {
+          const fb = await tryLocalFallback(err, async () => {
+            const identity = await resolveServerIdentity(repo);
+            if (!identity) return 1;
+            const local = await newLocalService();
+            const { current, local: locals } = await local.listBranches(identity);
+            printTable(locals.map((b) => ({ branch: b + (b === current ? '  *' : '') })));
+            return 0;
+          });
+          if (fb !== null) return fb;
+          throw err;
+        }
       }
       case 'create': {
         const params = await resolveRepoAndName(
@@ -663,15 +696,25 @@ async function runBranch(args: string[]): Promise<number> {
           'Usage: deltix branch create <repo> <name>',
         );
         if (!params) return 1;
-        const branch = await service.createBranch(params.repo, params.name);
-        // Spread the API response into flat key/value pairs instead of letting
-        // printSuccess serialize the object as a single JSON blob on one
-        // line (which is unreadable and looks like an error to operators).
-        printSuccess(`Branch created in ${params.repo}`, {
-          current: branch.currentBranch,
-          created: branch.createdBranch,
-        });
-        return 0;
+        try {
+          const branch = await service.createBranch(params.repo, params.name);
+          printSuccess(`Branch created in ${params.repo}`, {
+            current: branch.currentBranch,
+            created: branch.createdBranch,
+          });
+          return 0;
+        } catch (err) {
+          const fb = await tryLocalFallback(err, async () => {
+            const identity = await resolveServerIdentity(params.repo);
+            if (!identity) return 1;
+            const local = await newLocalService();
+            await local.createBranch(identity, params.name);
+            printSuccess(`Branch created locally in ${params.repo}`, { branch: params.name });
+            return 0;
+          });
+          if (fb !== null) return fb;
+          throw err;
+        }
       }
       case 'checkout': {
         const params = await resolveRepoAndName(
@@ -680,11 +723,24 @@ async function runBranch(args: string[]): Promise<number> {
           'Usage: deltix branch checkout <repo> <name>',
         );
         if (!params) return 1;
-        const branch = await service.checkoutBranch(params.repo, params.name);
-        printSuccess(`Checked out ${params.repo}`, {
-          current: branch.currentBranch,
-        });
-        return 0;
+        try {
+          const branch = await service.checkoutBranch(params.repo, params.name);
+          printSuccess(`Checked out ${params.repo}`, {
+            current: branch.currentBranch,
+          });
+          return 0;
+        } catch (err) {
+          const fb = await tryLocalFallback(err, async () => {
+            const identity = await resolveServerIdentity(params.repo);
+            if (!identity) return 1;
+            const local = await newLocalService();
+            await local.checkout(identity, params.name);
+            printSuccess(`Checked out locally ${params.repo}`, { branch: params.name });
+            return 0;
+          });
+          if (fb !== null) return fb;
+          throw err;
+        }
       }
       case 'delete': {
         const params = await resolveRepoAndName(
@@ -693,16 +749,42 @@ async function runBranch(args: string[]): Promise<number> {
           'Usage: deltix branch delete <repo> <name>',
         );
         if (!params) return 1;
-        await service.deleteBranch(params.repo, params.name);
-        printSuccess(`Branch deleted in ${params.repo}`, { deleted: params.name });
-        return 0;
+        try {
+          await service.deleteBranch(params.repo, params.name);
+          printSuccess(`Branch deleted in ${params.repo}`, { deleted: params.name });
+          return 0;
+        } catch (err) {
+          const fb = await tryLocalFallback(err, async () => {
+            const identity = await resolveServerIdentity(params.repo);
+            if (!identity) return 1;
+            const local = await newLocalService();
+            await local.deleteBranch(identity, params.name);
+            printSuccess(`Branch deleted locally in ${params.repo}`, { deleted: params.name });
+            return 0;
+          });
+          if (fb !== null) return fb;
+          throw err;
+        }
       }
       case 'current': {
         const repo = await resolveRepo(repoArg, 'Usage: deltix branch current <repo>');
         if (!repo) return 1;
-        const branch = await service.getCurrentBranch(repo);
-        printInfo(`Current branch for ${repo}: ${branch}`);
-        return 0;
+        try {
+          const branch = await service.getCurrentBranch(repo);
+          printInfo(`Current branch for ${repo}: ${branch}`);
+          return 0;
+        } catch (err) {
+          const fb = await tryLocalFallback(err, async () => {
+            const identity = await resolveServerIdentity(repo);
+            if (!identity) return 1;
+            const local = await newLocalService();
+            const { current } = await local.listBranches(identity);
+            printInfo(`Current branch for ${repo}: ${current ?? '(none)'}`);
+            return 0;
+          });
+          if (fb !== null) return fb;
+          throw err;
+        }
       }
       case 'local': {
         const identity = await resolveServerIdentity(repoArg);
@@ -803,7 +885,63 @@ async function runMerge(args: string[]): Promise<number> {
       logMergeConflict(err);
       return 1;
     }
+    // Fallback to local Dolt merge when repo not on server (daily flow)
+    if (
+      err instanceof RepoNotFoundError ||
+      err instanceof ServerUnreachableError ||
+      err instanceof VersioningAuthenticationError ||
+      err instanceof NoActiveSessionError
+    ) {
+      try {
+        const identity = await resolveServerIdentity(repo);
+        if (!identity) throw err;
+        const local = await newLocalService();
+        const result = await local.mergeBranches(identity, sourceBranch, targetBranch);
+        if (result.conflicts > 0) {
+          printError(`Merge failed with conflicts: ${result.conflicts} table(s)`);
+          return 1;
+        }
+        printSuccess(
+          `Merge completed locally for ${repo}${result.fastForward ? ' (fast-forward)' : ''}`,
+          {
+            source: sourceBranch,
+            target: targetBranch ?? '(current)',
+          },
+        );
+        return 0;
+      } catch (localErr) {
+        return handleVersioningError(localErr, 'Merge failed (local fallback)');
+      }
+    }
     return handleVersioningError(err, 'Merge failed');
+  }
+}
+
+async function runCheckout(args: string[]): Promise<number> {
+  const [branch, repoArg] = args;
+  // Support both `deltix checkout <branch>` and `deltix checkout <branch> <repo>`
+  const b = branch;
+  const r = repoArg;
+  if (!b) {
+    printError('Usage: deltix checkout <branch> [<repo>]');
+    return 1;
+  }
+  // If second arg looks like a repo (we have it), use it; else resolve from cwd
+  const repo = r ? await resolveRepo(r, 'Usage: deltix checkout <branch> [<repo>]') : null;
+  const identity = repo
+    ? await resolveServerIdentity(repo)
+    : await resolveServerIdentity(undefined);
+  if (!identity) {
+    printError('Usage: deltix checkout <branch> [<repo>]  (or run from a deltix init project)');
+    return 1;
+  }
+  try {
+    const local = await newLocalService();
+    await local.checkout(identity, b);
+    printSuccess(`Checked out ${b} in ${identity.repo}`);
+    return 0;
+  } catch (err) {
+    return handleSyncError(err, 'Checkout failed');
   }
 }
 
@@ -1594,6 +1732,8 @@ export async function runCli(argv: string[]): Promise<number> {
       return runRepo(rest);
     case 'branch':
       return runBranch(rest);
+    case 'checkout':
+      return runCheckout(rest);
     case 'merge':
       return runMerge(rest);
     case 'log':
@@ -1607,7 +1747,7 @@ export async function runCli(argv: string[]): Promise<number> {
     default:
       printLines([
         'Deltix-Client versioning parity with Deltix-Server Fase 5',
-        'Usage: deltix <version|configure|init|clone|import|commit|login|logout|whoami|push|pull|fetch|repo|branch|merge|log|diff|roles|sync-prefs|start|stop|status> [...args]',
+        'Usage: deltix <version|configure|init|clone|import|commit|checkout|login|logout|whoami|push|pull|fetch|repo|branch|merge|log|diff|roles|sync-prefs|start|stop|status> [...args]',
         'When run from a `deltix init`-ed working tree, [<repo>] becomes optional — the cwd project wins.',
         '  deltix configure',
         '  deltix init <repo>',
@@ -1623,6 +1763,7 @@ export async function runCli(argv: string[]): Promise<number> {
         '  deltix repo create <repo>',
         '  deltix repo list',
         '  deltix repo get [<repo>]',
+        '  deltix checkout <branch> [<repo>]',
         '  deltix branch list [<repo>]',
         '  deltix branch local [<repo>]',
         '  deltix branch create [<repo>] <name>',
