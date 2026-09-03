@@ -9,6 +9,25 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.8.0] - 2026-09-03
+
+**In plain terms:** A big internal cleanup — the entire command-line tool was carved into small, separate building blocks so it is easier to maintain, test and extend without breaking the daily workflows. On top of that, long-running commands like `push`, `pull`, `fetch`, `clone` and `import` now show progress feedback while they work instead of hanging silently, and the docs explain how the tool pairs cleanly with git without interfering with it.
+
+### Changed
+
+- **Completed the CLI split into modules.** `src/cli/index.ts` is now a thin dispatcher (~119 lines) that only parses argv and delegates; every command lives in `src/cli/commands/` (`auth`, `version`, `push`, `server`, `inspect`, `remote`, `admin`, `branching`, `branch`, `sync-prefs`, `configure`, `import`, `local`). Shared pure helpers sit in `src/cli/helpers/` and `src/cli/spinner.ts`. Commands depend on `ports/`, never on `mysql2`/`runDoltCommand` directly. All duplicated arg/helper functions were removed from the entrypoint.
+
+### Added
+
+- **Progress feedback for slow commands.** New `withSpinner` helper draws an animated spinner on a single line when run in an interactive terminal, and falls back to a plain one-line status message when piped/CI (no ANSI garbage in logs or scripts). Applied to: `push` (reading commits, uploading, advancing ref), `pull` (fetch/apply/merge), `fetch`, `clone` (download + checkout), and `import`.
+- **Git integration documentation.** New "Git integration" section in the README: `deltix` uses Dolt (not git) and never fires git hooks; `.deltix/` must be added to a code repo's `.gitignore`; optional `post-commit` / `post-merge` hook examples and a global `core.hooksPath` setup to auto-push data on code commits.
+
+### Tests
+
+- Unit suite passes: 128 tests, 0 failures.
+- `bun run lint` exits 0 (only low-severity complexity warnings remain).
+- Local sanity build of the compiled binary for `bun-linux-x64`; the binary compiles with the new `spinner.ts` module (277 modules bundled).
+
 ## [0.7.28] - 2026-09-03
 
 **In plain terms:** A software-quality checkpoint — the code that developers use every day got cleaner on the inside with no change to how the tool works from the outside. The command line was reorganised into small, separate building blocks so future changes are easier to test and less likely to introduce bugs, and the automatic quality gate (style checks) now runs clean. Nothing new for end users to learn.
