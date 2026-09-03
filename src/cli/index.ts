@@ -31,28 +31,14 @@ import {
   type ResolvedProject,
 } from '../contexts/local-project';
 import {
-  createMysqlEmbeddedService,
-  LocalServerNotRunningError,
-  LocalServerPortInUseError,
-  LocalServerStartError,
-} from '../contexts/mysql-embedded';
-import {
   createSessionService,
   NoActiveSessionError,
   ServerUnreachableError,
 } from '../contexts/session';
 import {
-  BranchAlreadyExistsError,
-  BranchNotFoundError,
   createVersioningService,
-  InsufficientRoleError,
   MergeConflictError,
-  ProtectedBranchError,
-  RepoAlreadyExistsError,
   RepoNotFoundError,
-  RoleAssignmentNotFoundError,
-  UserNotFoundError,
-  ValidationError,
   VersioningAuthenticationError,
 } from '../contexts/versioning';
 import {
@@ -63,16 +49,13 @@ import {
   VersioningLocalService,
 } from '../contexts/versioning-local';
 
-import {
-  DEFAULT_BRANCH,
-  DEFAULT_DOLT_PORT,
-  DEFAULT_MYSQL_PORT,
-  DEFAULT_SERVER_PORT,
-  DEFAULT_SERVER_URL,
-} from '../shared/constants';
+import { DEFAULT_MYSQL_PORT, DEFAULT_SERVER_PORT, DEFAULT_SERVER_URL } from '../shared/constants';
 import { applyPersistedConfigDefaults } from '../shared/env';
 import { runLogin, runLogout, runWhoami } from './commands/auth';
+import { runDiff, runLog } from './commands/inspect';
 import { runPush } from './commands/push';
+import { runClone, runFetch, runPull } from './commands/remote';
+import { runStart, runStatus, runStop } from './commands/server';
 import { runVersion } from './commands/version';
 import {
   printError,
@@ -98,7 +81,7 @@ import {
  *   splitPositionalsAndFlags(['hmc-sync', '--branch=main'])
  *     → { positionals: ['hmc-sync'], flags: ['--branch=main'] }
  */
-function splitPositionalsAndFlags(args: string[]): {
+function _splitPositionalsAndFlags(args: string[]): {
   positionals: string[];
   flags: string[];
 } {
@@ -120,139 +103,6 @@ function splitPositionalsAndFlags(args: string[]): {
     }
   }
   return { positionals, flags };
-}
-
-async function runPull(args: string[]): Promise<number> {
-  const abort = args.includes('--abort');
-  const positional = args.filter((a) => !a.startsWith('--'));
-  const repoArg = positional[0];
-
-  const identity = await resolveServerIdentity(repoArg);
-  if (!identity) {
-    return 1;
-  }
-  const branch = DEFAULT_BRANCH;
-  try {
-    const local = await newLocalService();
-
-    if (abort) {
-      await local.mergeAbort(identity, branch);
-      printSuccess(`Merge aborted for ${identity.repo}`);
-      return 0;
-    }
-
-    const from = await local.getRemoteHead(identity, branch);
-    const localHead = await local.getBranchHead(identity, branch);
-    const diverged = Boolean(from && localHead && localHead !== from);
-
-    const { commits, serverHead } = await createVersioningService().pullCommits(
-      identity.repo,
-      branch,
-      from,
-    );
-
-    if (diverged) {
-      // Materialize the server's new commits onto origin/<branch>, then merge
-      // that into the local branch (git pull == fetch + merge).
-      if (commits.length > 0) {
-        await local.applyCommits(identity, `origin/${branch}`, commits);
-      }
-      const result = await local.mergeFromRemote(identity, branch);
-      if (result.status === 'conflicts') {
-        printError(
-          `Merge conflicts in ${identity.repo}: ${result.conflicts
-            .map((c) => `${c.table} (${c.numConflicts})`)
-            .join(', ')}.`,
-        );
-        printInfo('Resolve them in the local Dolt repo, or run `deltix pull --abort`.');
-        return 1;
-      }
-      const merged = await local.getBranchHead(identity, branch);
-      if (merged) {
-        await local.advanceRemoteRef(identity, branch, merged);
-      }
-      printSuccess(`Merged ${serverHead ? 'server changes' : 'origin'} into ${identity.repo}`, {
-        head: merged,
-      });
-      return 0;
-    }
-
-    if (commits.length === 0) {
-      if (serverHead) {
-        await local.advanceRemoteRef(identity, branch, serverHead);
-      }
-      printInfo(`Already up to date for ${identity.repo}`);
-      return 0;
-    }
-    const head = await local.applyCommits(identity, branch, commits);
-    await local.advanceRemoteRef(identity, branch, head);
-    printSuccess(`Pulled ${commits.length} commit(s) into ${identity.repo}`, { head });
-    return 0;
-  } catch (err) {
-    return handleSyncError(err, 'Pull failed');
-  }
-}
-
-async function runFetch(args: string[]): Promise<number> {
-  const [repoArg] = args;
-  const identity = await resolveServerIdentity(repoArg);
-  if (!identity) {
-    return 1;
-  }
-  const branch = DEFAULT_BRANCH;
-  try {
-    const local = await newLocalService();
-    const from = await local.getRemoteHead(identity, branch);
-    if (!from) {
-      printInfo(`No remote-tracking ref for ${identity.repo} yet — run \`deltix pull\` first.`);
-      return 0;
-    }
-    const { commits, serverHead } = await createVersioningService().pullCommits(
-      identity.repo,
-      branch,
-      from,
-    );
-    if (commits.length === 0) {
-      if (serverHead && serverHead !== from) {
-        await local.advanceRemoteRef(identity, branch, serverHead);
-      }
-      printInfo(`No new commits for ${identity.repo}`);
-      return 0;
-    }
-    // Materialize onto origin/<branch>; leave the working branch untouched.
-    await local.applyCommits(identity, `origin/${branch}`, commits);
-    await local.checkout(identity, branch);
-    printSuccess(`Fetched ${commits.length} commit(s) into origin/${branch} of ${identity.repo}`);
-    return 0;
-  } catch (err) {
-    return handleSyncError(err, 'Fetch failed');
-  }
-}
-
-async function runClone(args: string[]): Promise<number> {
-  const [repo] = args;
-  if (!repo) {
-    printError('Usage: deltix clone <repo>');
-    return 1;
-  }
-  try {
-    const targetDir = join(process.cwd(), repo);
-    await mkdir(targetDir, { recursive: true });
-    const project = await createLocalProjectService().init(targetDir, repo);
-    const identity = { repo: project.config.repo, projectRoot: project.root };
-    const local = await newLocalService();
-    await local.initLocalRepo(identity);
-    const { commits } = await createVersioningService().pullCommits(repo, DEFAULT_BRANCH, null);
-    if (commits.length > 0) {
-      const head = await local.applyCommits(identity, DEFAULT_BRANCH, commits);
-      await local.advanceRemoteRef(identity, DEFAULT_BRANCH, head);
-    }
-    printSuccess(`Cloned ${repo} into ${targetDir}`, { commits: commits.length });
-    printInfo(`Next: cd ${repo} && deltix start`);
-    return 0;
-  } catch (err) {
-    return handleSyncError(err, 'Clone failed');
-  }
 }
 
 function flagValue(args: string[], name: string): string | undefined {
@@ -397,7 +247,7 @@ async function maybePromptForDsnPassword(dsn: string): Promise<string> {
  * Only long flags accept the `--flag=value` form (short flags can't
  * practically be `--n=5`, and supporting it would invite ambiguity).
  */
-function parseFlagValue(args: string[], flagName: string): string | undefined {
+function _parseFlagValue(args: string[], flagName: string): string | undefined {
   // Long form: --name=value
   const eq = args.find((a) => a.startsWith(`--${flagName}=`));
   if (eq) return eq.slice(flagName.length + 3);
@@ -774,112 +624,6 @@ async function runCheckout(args: string[]): Promise<number> {
   }
 }
 
-async function runLog(args: string[]): Promise<number> {
-  // Separate flags from positionals so `deltix log -n 5 hmc-sync` works
-  // regardless of flag position (like git log -n 5 <branch>).
-  const { positionals, flags } = splitPositionalsAndFlags(args);
-  const repoArg = positionals[0];
-  // Mirror `deltix push`: when no repo is given, fall back to the project
-  // initialised in cwd so a developer doesn't have to remember the repo name
-  // they typed at `deltix init` time. Without this, `deltix log` from inside a
-  // working tree would print a usage error even though the project context is
-  // unambiguous.
-  let repo = repoArg;
-  if (!repo) {
-    try {
-      const project = await createLocalProjectService().resolve(process.cwd());
-      repo = project.config.repo;
-    } catch (err) {
-      if (err instanceof NoProjectError) {
-        printError(
-          'Usage: deltix log <repo> [--branch=name|-b name] [--limit=N|-n N]   (omit <repo> to use the cwd project)',
-        );
-        return 1;
-      }
-      throw err;
-    }
-  }
-
-  // Accept both --branch=foo (long) and --branch foo or -b foo (shell-friendly).
-  const branch = parseFlagValue(flags, 'branch') ?? flagValue(flags, 'b');
-  const limitValue = parseFlagValue(flags, 'limit') ?? parseFlagValue(flags, 'n');
-  const limit = limitValue ? Number(limitValue) : undefined;
-
-  try {
-    const log = await createVersioningService().getLog(repo, {
-      ...(branch ? { branch } : {}),
-      ...(limit !== undefined ? { limit } : {}),
-    });
-    // Server returns `{ commits: [...], limit }`; printTable expects the row
-    // array directly. The previous `log as unknown as Array<...>` cast hid the
-    // shape mismatch and turned into a runtime `rows.reduce is not a function`
-    // every time anyone ran `deltix log`.
-    printTable(log.commits as unknown as Array<Record<string, unknown>>);
-    return 0;
-  } catch (err) {
-    return handleVersioningError(err, 'Log failed');
-  }
-}
-
-async function runDiff(args: string[]): Promise<number> {
-  const [repoArg, from, to] = args;
-
-  // Local working-tree diff (Git-like): `deltix diff` / `deltix diff <repo> [table]`
-  // shows what the app/ORM wrote to Dolt via the MySQL wire protocol.
-  // Server diff (existing): `deltix diff <repo> <from> <to>`.
-  if (!from || !to) {
-    // 0 args: cwd project, 1 arg: repo, 2 args: repo + table
-    let identity: { repo: string; projectRoot?: string } | null = null;
-    let table: string | undefined;
-    if (args.length === 0) {
-      identity = await resolveServerIdentity(undefined);
-    } else if (args.length === 1) {
-      identity = await resolveServerIdentity(repoArg);
-    } else if (args.length === 2) {
-      identity = await resolveServerIdentity(repoArg);
-      table = from;
-    }
-    if (!identity) {
-      printError(
-        'Usage: deltix diff [<repo> [<from> <to> | <table>]]  (no refs = working-tree diff)',
-      );
-      return 1;
-    }
-    try {
-      const local = await newLocalService();
-      const { raw } = await local.getWorkingDiffSummary(identity, table);
-      if (!raw) {
-        printInfo('No changes in working tree.');
-        return 0;
-      }
-      printInfo(`Working-tree diff for ${identity.repo}${table ? ` / ${table}` : ''}:`);
-      for (const line of raw.split('\n').filter(Boolean)) {
-        printInfo(`  ${line}`);
-      }
-      printInfo('  (unstaged — `deltix status` for overview, `deltix commit -m "msg"` to stage)');
-      return 0;
-    } catch (err) {
-      return handleSyncError(err, 'Diff failed');
-    }
-  }
-
-  const repo = await resolveRepo(repoArg, 'Usage: deltix diff <repo> <from> <to>');
-  if (!repo || !from || !to) return 1;
-
-  try {
-    const diff = await createVersioningService().getDiff(repo, from, to);
-    // Server returns `{ fromRef, toRef, tables: [...] }`. The row table is
-    // `diff.tables`, not `diff` itself — passing `diff` directly (and casting
-    // away the type) was the source of the `rows.reduce is not a function` bug
-    // when this command hit a real server response.
-    printKeyValues({ repo, from, to });
-    printTable(diff.tables as unknown as Array<Record<string, unknown>>);
-    return 0;
-  } catch (err) {
-    return handleVersioningError(err, 'Diff failed');
-  }
-}
-
 async function runRoles(args: string[]): Promise<number> {
   const [action, repoArg, username, role] = args;
   if (!action) {
@@ -1009,29 +753,6 @@ async function runSyncPrefs(args: string[]): Promise<number> {
   } catch (err) {
     return handleVersioningError(err, 'Sync preferences command failed');
   }
-}
-
-function handleVersioningError(err: unknown, action: string): number {
-  if (err instanceof NoActiveSessionError || err instanceof VersioningAuthenticationError) {
-    printError('Not logged in. Run `deltix login` first.');
-    return 1;
-  }
-  if (
-    err instanceof InsufficientRoleError ||
-    err instanceof RepoNotFoundError ||
-    err instanceof BranchNotFoundError ||
-    err instanceof BranchAlreadyExistsError ||
-    err instanceof ProtectedBranchError ||
-    err instanceof RepoAlreadyExistsError ||
-    err instanceof RoleAssignmentNotFoundError ||
-    err instanceof UserNotFoundError ||
-    err instanceof ValidationError
-  ) {
-    printError(`${action}: ${err.message}`);
-    return 1;
-  }
-  printError(`${action}: ${String(err)}`);
-  return 1;
 }
 
 /**
@@ -1330,146 +1051,6 @@ async function resolveServerIdentity(
   return fromProject;
 }
 
-async function runStart(args: string[]): Promise<number> {
-  const [repoArg] = args;
-  const identity = await resolveServerIdentity(repoArg);
-  if (!identity) return 1;
-  try {
-    // Ensure the local Dolt repo exists (idempotent) before serving it, so
-    // `start` works even if `init` deferred repo creation.
-    const local = await newLocalService();
-    await local.initLocalRepo(identity);
-    const state = await createMysqlEmbeddedService().start(identity);
-    printSuccess(`Local Dolt SQL server started for ${identity.repo}`, {
-      host: '127.0.0.1',
-      port: state.port,
-      pid: state.pid,
-      dataDir: state.dataDir,
-    });
-    // Remember the port the operator actually used so they don't have to
-    // set DELTIX_LOCAL_PORT=... on every subsequent command. We only persist
-    // when the env var was explicit — silent persistence of the default
-    // would surprise anyone sharing the config file across hosts (e.g. dotfiles).
-    await persistLocalPortIfExplicit(state.port);
-    return 0;
-  } catch (err) {
-    return handleLocalServerError(err);
-  }
-}
-
-/**
- * Saves `port` to the Deltix config when DELTIX_LOCAL_PORT is currently set
- * in the process environment (meaning the operator chose it explicitly).
- * Merges into the existing config so unrelated fields (server URL, TLS,
- * credentials paths) are preserved. No-op when DELTIX_LOCAL_PORT is unset
- * OR when the persisted port already matches.
- */
-async function persistLocalPortIfExplicit(
-  port: number,
-  configPath: string = defaultConfigPath,
-): Promise<void> {
-  if (Bun.env.DELTIX_LOCAL_PORT === undefined) return;
-  const store = new ConfigStore(configPath);
-  const existing = (await store.load()) ?? {};
-  if (existing.localPort === port) return;
-  await store.save({ ...existing, localPort: port });
-}
-
-async function runStop(args: string[]): Promise<number> {
-  const [repoArg] = args;
-  const identity = await resolveServerIdentity(repoArg);
-  if (!identity) return 1;
-  try {
-    await createMysqlEmbeddedService().stop(identity);
-    printSuccess(`Local Dolt SQL server stopped for ${identity.repo}`);
-    return 0;
-  } catch (err) {
-    return handleLocalServerError(err);
-  }
-}
-
-async function runStatus(args: string[]): Promise<number> {
-  const [repoArg] = args;
-  const identity = await resolveServerIdentity(repoArg);
-  if (!identity) return 1;
-  try {
-    const status = await createMysqlEmbeddedService().status(identity);
-    if (status.running) {
-      printSuccess(`Local Dolt SQL server is running for ${identity.repo}`, {
-        host: '127.0.0.1',
-        port: status.port,
-        pid: status.pid,
-        dataDir: status.dataDir,
-      });
-    } else {
-      printInfo(`Local Dolt SQL server is not running for ${identity.repo}`);
-    }
-
-    // Git-like working-tree status (staged vs unstaged) — the missing piece
-    // for the "ORM writes to Dolt" workflow. The app points to :3307, migrations
-    // land in Dolt's working tree, and `deltix status` tells the operator what
-    // changed without needing to re-import.
-    // Fast path: when the server is running, query via MySQL wire protocol
-    // (~50ms) instead of spawning two `dolt` CLI processes (~6s on Windows).
-    try {
-      const local = await newLocalService();
-      const ws = await local.getStatus(identity, {
-        host: '127.0.0.1',
-        port: status.port,
-      });
-      if (ws.branch) {
-        printInfo(`On branch ${ws.branch}`);
-      }
-      if (ws.clean) {
-        printInfo('Working tree clean — nothing to commit.');
-        printInfo(
-          `Run a migration against Dolt (:${status.port ?? DEFAULT_DOLT_PORT}) and re-run \`deltix status\` to see changes.`,
-        );
-      } else {
-        if (ws.staged.length > 0) {
-          printInfo('Changes to be committed:');
-          printTable(ws.staged.map((r) => ({ table: r.table, status: r.status })));
-        }
-        if (ws.unstaged.length > 0) {
-          printInfo('Changes not staged for commit:');
-          printTable(ws.unstaged.map((r) => ({ table: r.table, status: r.status })));
-          printInfo('  (use `deltix commit -m "msg" [tables]` to stage and commit)');
-        }
-        // Hint for the "app points to Dolt" workflow
-        if (ws.staged.length === 0 && ws.unstaged.length > 0) {
-          printInfo(
-            '  (all changes are unstaged — `deltix commit` will stage everything with `dolt add -A`)',
-          );
-        }
-      }
-    } catch {
-      // No local repo yet (e.g. before first `deltix init`/`start`) — keep server
-      // status output only, don't fail the command.
-    }
-
-    return 0;
-  } catch (err) {
-    return handleLocalServerError(err);
-  }
-}
-
-function handleLocalServerError(err: unknown): number {
-  if (err instanceof LocalServerPortInUseError) {
-    printError(err.message);
-    return 2;
-  }
-  if (err instanceof LocalServerNotRunningError) {
-    printError(err.message);
-    return 1;
-  }
-  if (err instanceof LocalServerStartError) {
-    printError(err.message);
-    return 1;
-  }
-  printError(`Local server command failed: ${String(err)}`);
-  return 1;
-}
-
 export async function runCli(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
 
@@ -1569,4 +1150,5 @@ if (import.meta.main) {
   process.exit(exitCode);
 }
 
-export { parseFlagValue, persistLocalPortIfExplicit, splitPositionalsAndFlags };
+export { parseFlagValue, splitPositionalsAndFlags } from './helpers/args';
+export { persistLocalPortIfExplicit } from './helpers/persist-local-port';
