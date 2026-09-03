@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runDoltCommand } from '../../acl/dolt-exec';
@@ -38,6 +38,8 @@ export interface LocalCommitTable {
 }
 
 export interface LocalCommitWithData {
+  /** Server-assigned commit hash; present on pulled commits. */
+  hash?: string;
   message: string;
   author: string;
   tables: LocalCommitTable[];
@@ -689,12 +691,27 @@ export class VersioningLocalService {
     await this.ensureLocalRepo(binaryPath, dataDir, id.repo);
     await this.checkoutBranch(binaryPath, dataDir, branch);
 
-    for (const commit of commits) {
+    // Idempotent apply: skip commits we've already recreated locally for this
+    // branch. This matters when the server degrades to a full-history
+    // re-sync (its `from` negotiation hash was no longer reachable) and
+    // resends commits we already applied — without this guard we'd recreate
+    // them as divergent duplicates. We can't detect that by comparing against
+    // *local* Dolt commit hashes: Dolt's commit hash is content-addressed and
+    // folds in the commit timestamp, so replaying the same change at a later
+    // wall-clock time always produces a different local hash than the
+    // server's original one. Instead we persist the set of server-assigned
+    // hashes already applied, alongside the local repo.
+    const appliedPath = this.appliedCommitsPath(dataDir, branch);
+    const applied = await this.readAppliedHashes(appliedPath);
+    const pending = commits.filter((c) => !c.hash || !applied.has(c.hash));
+
+    for (const commit of pending) {
       for (const table of commit.tables) {
         await this.importTable(binaryPath, dataDir, table);
       }
       const names = commit.tables.map((t) => t.name);
       if (names.length === 0) {
+        if (commit.hash) applied.add(commit.hash);
         continue;
       }
       const add = await runDoltCommand(binaryPath, ['--data-dir', dataDir, 'add', ...names], {
@@ -719,6 +736,11 @@ export class VersioningLocalService {
       if (commitResult.exitCode !== 0) {
         throw new PushError('commit', commitResult.stderr.trim() || commitResult.stdout.trim());
       }
+      if (commit.hash) applied.add(commit.hash);
+    }
+
+    if (pending.length > 0) {
+      await this.writeAppliedHashes(appliedPath, applied);
     }
 
     const head = await this.readBranchHash(binaryPath, dataDir, branch);
@@ -726,6 +748,27 @@ export class VersioningLocalService {
       throw new PushError('log', 'could not resolve branch head after apply');
     }
     return head;
+  }
+
+  /** Sidecar file path tracking server-assigned commit hashes already applied to `branch`. */
+  private appliedCommitsPath(dataDir: string, branch: string): string {
+    const safeBranch = branch.replace(/[^A-Za-z0-9._-]/g, '_');
+    return join(dataDir, '.deltix-applied-commits', `${safeBranch}.json`);
+  }
+
+  private async readAppliedHashes(path: string): Promise<Set<string>> {
+    try {
+      const raw = await readFile(path, 'utf8');
+      const parsed = JSON.parse(raw) as unknown;
+      return new Set(Array.isArray(parsed) ? parsed.filter((v) => typeof v === 'string') : []);
+    } catch {
+      return new Set();
+    }
+  }
+
+  private async writeAppliedHashes(path: string, hashes: Set<string>): Promise<void> {
+    await mkdir(join(path, '..'), { recursive: true });
+    await writeFile(path, JSON.stringify([...hashes]), 'utf8');
   }
 
   /**

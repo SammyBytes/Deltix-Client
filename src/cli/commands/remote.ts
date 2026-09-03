@@ -10,6 +10,10 @@ import { printError, printInfo, printSuccess } from '../output';
 import { withSpinner } from '../spinner';
 
 export async function runPull(args: string[]): Promise<number> {
+  if (args.includes('--help') || args.includes('-h')) {
+    printInfo('Usage: deltix pull [repo] [--abort]');
+    return 0;
+  }
   const abort = args.includes('--abort');
   const positional = args.filter((a) => !a.startsWith('--'));
   const repoArg = positional[0];
@@ -90,6 +94,10 @@ export async function runPull(args: string[]): Promise<number> {
 }
 
 export async function runFetch(args: string[]): Promise<number> {
+  if (args.includes('--help') || args.includes('-h')) {
+    printInfo('Usage: deltix fetch [repo]');
+    return 0;
+  }
   const [repoArg] = args;
   const identity = await resolveServerIdentity(repoArg);
   if (!identity) {

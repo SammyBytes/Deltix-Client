@@ -9,6 +9,23 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.8.2] - 2026-09-03
+
+**In plain terms:** For a long time, `pull` and `fetch` could quietly stop working with a puzzling "target commit not found" error when your local copy had drifted out of sync with the central server. That was a problem on the server side, but the tool could not cope with the fix. Now, after the server sends the full history to get things back in step, this update makes sure the tool folds that history in cleanly without accidentally duplicating commits it already had. The copy pulls into sync cleanly, no duplicates, instead of failing.
+
+### Fixed
+
+- **`applyCommits` is now idempotent during a server full-history re-sync.** When the server responds to a stale/negotiation-hash (`from`) that is no longer reachable, it degrades to streaming the complete branch history (see the companion Deltix-Server v0.8.7 fix) so the client can reconcile from scratch. Without a guard, the client would naively re-import and re-commit history it already held, producing divergent duplicate commits on `pull`/`fetch`.
+- **`applyCommits` now tracks server-assigned commit hashes already applied, instead of comparing local Dolt hashes.** An earlier version of this fix filtered the incoming commit list against `dolt_log AS OF '<branch>'` — but Dolt's commit hash is content-addressed and folds in the commit timestamp, so replaying the same change at a later wall-clock time always produces a *different* local hash than the server's original one. That comparison could never match, so the guard was silently a no-op. It now persists the set of server-assigned hashes already applied in a small sidecar file next to the local repo, and skips any incoming commit whose hash is already recorded there — genuinely idempotent regardless of when the local commit was recreated.
+- **`ImportedCommit` now carries the server-assigned `hash`.** The server already sent each commit's hash over the wire; the client type dropped it, which the idempotency guard needs. Type updated so the hash flows through `pullCommits` → `applyCommits`.
+- **`deltix pull --help` / `deltix fetch --help` now print usage instead of running the real command.** Previously `--help`/`-h` were ignored and the tool attempted an actual pull/fetch against the configured server, failing with a confusing error when no server was reachable instead of showing usage.
+
+### Tests
+
+- Unit suite passes: 128 tests, 0 failures (unchanged).
+- New integration test (`tests/integration/versioning-local/apply-commits-idempotency.integration.test.ts`, real Dolt binary) reproduces the bug: applying the identical commit payload twice no longer duplicates it, and a mix of already-applied + genuinely-new commits still folds in only the new one. Verified this test fails against the previous (`dolt_log`-comparison) implementation and passes with the sidecar-file fix.
+- Companion Deltix-Server v0.8.7 adds an integration test asserting a stale `from` hash yields a `200` full re-sync instead of an error.
+
 ## [0.8.1] - 2026-09-03
 
 **In plain terms:** The previous update (0.8.0) broke a critical thing on Windows: the tool lost track of where your data actually lives on disk, so one of the daily commands (`start`) could no longer turn on the local server, and a couple of others crashed with an obscure message instead of doing their job. This patch puts those back: the tool now finds your data folder correctly on every operating system, the commands that were crashing show the real, readable error again, and the progress check now reports the correct process number when it finds the server already running. No new features — just fixing what the last update unintentionally broke.

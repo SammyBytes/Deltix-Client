@@ -87,6 +87,7 @@ export interface ImportedTable {
 }
 
 export interface ImportedCommit {
+  hash: string;
   message: string;
   author: string;
   tables: ImportedTable[];
