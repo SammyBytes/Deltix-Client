@@ -7,6 +7,7 @@ import { handleSyncError } from '../helpers/handle-sync-error';
 import { newLocalService } from '../helpers/newLocalService';
 import { resolveServerIdentity } from '../helpers/repo';
 import { printError, printInfo, printSuccess } from '../output';
+import { withSpinner } from '../spinner';
 
 export async function runPull(args: string[]): Promise<number> {
   const abort = args.includes('--abort');
@@ -22,7 +23,7 @@ export async function runPull(args: string[]): Promise<number> {
     const local = await newLocalService();
 
     if (abort) {
-      await local.mergeAbort(identity, branch);
+      await withSpinner('Aborting merge', () => local.mergeAbort(identity, branch));
       printSuccess(`Merge aborted for ${identity.repo}`);
       return 0;
     }
@@ -31,19 +32,22 @@ export async function runPull(args: string[]): Promise<number> {
     const localHead = await local.getBranchHead(identity, branch);
     const diverged = Boolean(from && localHead && localHead !== from);
 
-    const { commits, serverHead } = await createVersioningService().pullCommits(
-      identity.repo,
-      branch,
-      from,
+    const { commits, serverHead } = await withSpinner(
+      `Fetching changes from ${identity.repo}`,
+      () => createVersioningService().pullCommits(identity.repo, branch, from),
     );
 
     if (diverged) {
       // Materialize the server's new commits onto origin/<branch>, then merge
       // that into the local branch (git pull == fetch + merge).
       if (commits.length > 0) {
-        await local.applyCommits(identity, `origin/${branch}`, commits);
+        await withSpinner('Applying server commits', () =>
+          local.applyCommits(identity, `origin/${branch}`, commits),
+        );
       }
-      const result = await local.mergeFromRemote(identity, branch);
+      const result = await withSpinner('Merging into local branch', () =>
+        local.mergeFromRemote(identity, branch),
+      );
       if (result.status === 'conflicts') {
         printError(
           `Merge conflicts in ${identity.repo}: ${result.conflicts
@@ -55,7 +59,9 @@ export async function runPull(args: string[]): Promise<number> {
       }
       const merged = await local.getBranchHead(identity, branch);
       if (merged) {
-        await local.advanceRemoteRef(identity, branch, merged);
+        await withSpinner('Advancing remote ref', () =>
+          local.advanceRemoteRef(identity, branch, merged),
+        );
       }
       printSuccess(`Merged ${serverHead ? 'server changes' : 'origin'} into ${identity.repo}`, {
         head: merged,
@@ -65,13 +71,17 @@ export async function runPull(args: string[]): Promise<number> {
 
     if (commits.length === 0) {
       if (serverHead) {
-        await local.advanceRemoteRef(identity, branch, serverHead);
+        await withSpinner('Advancing remote ref', () =>
+          local.advanceRemoteRef(identity, branch, serverHead),
+        );
       }
       printInfo(`Already up to date for ${identity.repo}`);
       return 0;
     }
-    const head = await local.applyCommits(identity, branch, commits);
-    await local.advanceRemoteRef(identity, branch, head);
+    const head = await withSpinner('Applying pulled commits', () =>
+      local.applyCommits(identity, branch, commits),
+    );
+    await withSpinner('Advancing remote ref', () => local.advanceRemoteRef(identity, branch, head));
     printSuccess(`Pulled ${commits.length} commit(s) into ${identity.repo}`, { head });
     return 0;
   } catch (err) {
@@ -93,21 +103,24 @@ export async function runFetch(args: string[]): Promise<number> {
       printInfo(`No remote-tracking ref for ${identity.repo} yet — run \`deltix pull\` first.`);
       return 0;
     }
-    const { commits, serverHead } = await createVersioningService().pullCommits(
-      identity.repo,
-      branch,
-      from,
+    const { commits, serverHead } = await withSpinner(
+      `Fetching changes from ${identity.repo}`,
+      () => createVersioningService().pullCommits(identity.repo, branch, from),
     );
     if (commits.length === 0) {
       if (serverHead && serverHead !== from) {
-        await local.advanceRemoteRef(identity, branch, serverHead);
+        await withSpinner('Advancing remote ref', () =>
+          local.advanceRemoteRef(identity, branch, serverHead),
+        );
       }
       printInfo(`No new commits for ${identity.repo}`);
       return 0;
     }
     // Materialize onto origin/<branch>; leave the working branch untouched.
-    await local.applyCommits(identity, `origin/${branch}`, commits);
-    await local.checkout(identity, branch);
+    await withSpinner('Applying fetched commits', () =>
+      local.applyCommits(identity, `origin/${branch}`, commits),
+    );
+    await withSpinner('Checking out branch', () => local.checkout(identity, branch));
     printSuccess(`Fetched ${commits.length} commit(s) into origin/${branch} of ${identity.repo}`);
     return 0;
   } catch (err) {
@@ -127,11 +140,17 @@ export async function runClone(args: string[]): Promise<number> {
     const project = await createLocalProjectService().init(targetDir, repo);
     const identity = { repo: project.config.repo, projectRoot: project.root };
     const local = await newLocalService();
-    await local.initLocalRepo(identity);
-    const { commits } = await createVersioningService().pullCommits(repo, DEFAULT_BRANCH, null);
+    await withSpinner('Initializing local repo', () => local.initLocalRepo(identity));
+    const { commits } = await withSpinner(`Downloading repo ${repo}`, () =>
+      createVersioningService().pullCommits(repo, DEFAULT_BRANCH, null),
+    );
     if (commits.length > 0) {
-      const head = await local.applyCommits(identity, DEFAULT_BRANCH, commits);
-      await local.advanceRemoteRef(identity, DEFAULT_BRANCH, head);
+      const head = await withSpinner('Checking out data', () =>
+        local.applyCommits(identity, DEFAULT_BRANCH, commits),
+      );
+      await withSpinner('Advancing remote ref', () =>
+        local.advanceRemoteRef(identity, DEFAULT_BRANCH, head),
+      );
     }
     printSuccess(`Cloned ${repo} into ${targetDir}`, { commits: commits.length });
     printInfo(`Next: cd ${repo} && deltix start`);

@@ -16,6 +16,7 @@ import { createSessionService } from '../../contexts/session';
 import { CommitDataDirNotFoundError, LocalRepoInitError } from '../../contexts/versioning-local';
 import { flagMulti, flagValue } from '../helpers/args';
 import { printError, printInfo, printSuccess, promptConfirm, promptSecret } from '../output';
+import { withSpinner } from '../spinner';
 
 export async function runImport(args: string[]): Promise<number> {
   const repoArg = args.find((a) => !a.startsWith('--'));
@@ -65,15 +66,17 @@ export async function runImport(args: string[]): Promise<number> {
     const identity = { repo: project.config.repo, projectRoot: project.root };
     const sessionStatus = await createSessionService().status();
     const authorName = sessionStatus.loggedIn ? sessionStatus.username : undefined;
-    const result = await createImportService().import(identity, {
-      from: dsnWithPromptedSecret,
-      tables: flagMulti(args, 'table'),
-      schemaOnly: effectiveSchemaOnly,
-      continueOnRowError,
-      noCommit: args.includes('--no-commit'),
-      blobs,
-      authorName,
-    });
+    const result = await withSpinner(`Importing into ${repoArg}`, () =>
+      createImportService().import(identity, {
+        from: dsnWithPromptedSecret,
+        tables: flagMulti(args, 'table'),
+        schemaOnly: effectiveSchemaOnly,
+        continueOnRowError,
+        noCommit: args.includes('--no-commit'),
+        blobs,
+        authorName,
+      }),
+    );
     printSuccess(`Imported ${result.tablesImported} table(s) from ${result.database}`, {
       commit: result.commitHash ?? '(not committed — --no-commit)',
     });

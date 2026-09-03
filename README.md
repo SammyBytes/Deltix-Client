@@ -251,6 +251,62 @@ deltix push
 
 ---
 
+## Git integration
+
+`deltix` pairs your data with your code — it **does not replace git and does
+not fire git hooks**. Its local versioning lives in Dolt (a database that
+versions itself like git), so `deltix commit` / `push` / `pull` do **not** go
+through `git`, even when run inside an existing git repo — they are two
+independent versioning tracks that coexist in the same working tree.
+
+| Artifact | What it is | Does git see it? |
+|---|---|---|
+| `.deltix/config.toml` | Project binding (`deltix init`), the analog of `.git/config` | Yes, as an **untracked** file |
+| `~/.deltix/` | Local Dolt repos + client config (outside the tree) | No (lives in the home dir) |
+| `.dolt/` | Data Dolt repo (outside the working tree) | No |
+
+### The one rule you must respect
+
+When you run `deltix init` inside a code git repo, **add `.deltix/` to your
+`.gitignore`**:
+
+```text
+# .gitignore
+.deltix/
+```
+
+Otherwise a plain `git add .` would drag the local Deltix binding into your
+code repo by accident (the binding varies per machine and should not travel via
+git). Your data — the Dolt repos — already live outside the working tree under
+`~/.deltix/`, so only the project-root `.deltix/config.toml` is what you need to
+ignore.
+
+### Optional hooks (example)
+
+Since `deltix` does not trigger git hooks, if you want your data pushed
+automatically whenever you `git commit` / `git push` code, create the hook
+yourself. Example `post-commit`:
+
+```bash
+# .git/hooks/post-commit  (create the file and `chmod +x .git/hooks/post-commit`)
+deltix push   # runs from the repo dir, resolves the project automatically
+```
+
+You can do the same with `post-merge` (refresh data after a `git pull`). For
+push automation across all your projects, set a global hooks dir:
+
+```bash
+git config --global core.hooksPath ~/.git-hooks
+# then write the hook at ~/.git-hooks/post-commit and make it executable
+```
+
+> Warning: hooks run on every commit of every project using that
+> `core.hooksPath`. A silently failing `deltix push` could slow you down, and a
+> `deltix push` when there is nothing to push is wasted work. Prefer a
+> per-repo hook, or gate it behind "only run when there is something to send".
+
+---
+
 ## Architecture
 
 ```
