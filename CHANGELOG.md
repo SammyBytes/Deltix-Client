@@ -9,6 +9,14 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.7.26] - 2026-08-31
+
+**In plain terms:** `deltix` now does branches, checkouts and merges locally — no need to touch `dolt` directly. Daily use is 100% `deltix`.
+
+### Added
+
+- **Local `deltix branch` / `deltix checkout` / `deltix merge` via Dolt.** `VersioningLocalService` now exposes `createBranch`, `deleteBranch`, `mergeBranches` and `listBranches`/`checkout` via the MySQL wire protocol when `dolt sql-server` is running (with stop/CLI/start fallback so `checkout` is global, not per-connection). `runBranch` and `runMerge` in the CLI now try the server first and fall back to local on `RepoNotFound`/`ServerUnreachable`/`NoActiveSession`, so `deltix branch create <repo> <name>` and `deltix merge <repo> <src> [target]` work even before `deltix push`. New top-level `deltix checkout <branch> [<repo>]` (alias for local checkout) was added. Tested with Drizzle on `drizzle-test`: `branch create` → `checkout feature-e2e` → `drizzle insert` → `status` shows unstaged → `commit` → `checkout main` (isolation: `main` has 4 users, feature has 5) → `merge` (fast-forward) → `main` now has 5.
+
 ## [0.7.25] - 2026-08-31
 
 **In plain terms:** `deltix status` no longer deletes its own tracking file when the server was adopted with `pid -1`.

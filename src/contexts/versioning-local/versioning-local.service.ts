@@ -387,13 +387,226 @@ export class VersioningLocalService {
 
   /** Switch the working tree to `branch` (public wrapper over the internal checkout). */
   async checkout(id: LocalServerIdentity, branch: string): Promise<void> {
-    const dataDir = computeLocalDataDir(this.deps.homeDir, id);
+    let dataDir = computeLocalDataDir(this.deps.homeDir, id);
     if (!existsSync(dataDir)) {
-      throw new CommitDataDirNotFoundError(id.repo);
+      const fallback = await this.findDataDirForRepo(id.repo);
+      if (fallback) dataDir = fallback;
+      else throw new CommitDataDirNotFoundError(id.repo);
     }
     const binaryPath = await this.deps.binaryManager.ensureInstalled();
     await this.ensureLocalRepo(binaryPath, dataDir, id.repo);
+
+    // `dolt checkout` via CLI is blocked when `dolt sql-server` is running.
+    // In that case we must stop the server, do the checkout on the
+    // filesystem, and restart it — otherwise `CALL DOLT_CHECKOUT` via MySQL
+    // only affects the current session and is not visible to `dolt branch -a`
+    // or to new app connections.
+    const isRunning = await this.isServerRunning();
+    if (isRunning) {
+      const { MysqlEmbeddedService } = await import('../mysql-embedded');
+      const { loadEnv } = await import('../../shared/env');
+      const env = loadEnv();
+      const svc = new MysqlEmbeddedService({
+        homeDir: this.deps.homeDir,
+        localHost: env.DELTIX_LOCAL_HOST ?? '127.0.0.1',
+        localPort: Number(env.DELTIX_LOCAL_PORT ?? 3307),
+        binaryManager: this.deps
+          .binaryManager as unknown as import('../binary-manager').BinaryManager,
+      });
+      try {
+        await svc.stop(id);
+      } catch {}
+      const result = await runDoltCommand(binaryPath, ['--data-dir', dataDir, 'checkout', branch], {
+        timeoutMs: 10_000,
+      });
+      // Restart even if checkout failed, to not leave the DB down
+      try {
+        await svc.start(id);
+      } catch {}
+      if (result.exitCode !== 0)
+        throw new PushError('checkout', result.stderr.trim() || result.stdout.trim());
+      return;
+    }
+
     await this.checkoutBranch(binaryPath, dataDir, branch);
+  }
+
+  private async isServerRunning(): Promise<boolean> {
+    try {
+      const { isTcpPortOpen } = await import('../mysql-embedded/mysql-embedded.service');
+      const { loadEnv } = await import('../../shared/env');
+      const env = loadEnv();
+      const host = env.DELTIX_LOCAL_HOST ?? '127.0.0.1';
+      const port = Number(env.DELTIX_LOCAL_PORT ?? 3307);
+      return await isTcpPortOpen(host, port);
+    } catch {
+      return false;
+    }
+  }
+
+  private async checkoutViaMysql(id: LocalServerIdentity, branch: string): Promise<boolean | null> {
+    try {
+      const env = await import('../mysql-embedded/mysql-embedded.service');
+      // We don't have host/port here — try default 127.0.0.1:3307 via mysql
+      const mysql = await import('mysql2/promise');
+      const conn = await mysql.createConnection({
+        host: '127.0.0.1',
+        port: 3307,
+        user: 'root',
+        database: id.repo,
+        connectTimeout: 1200,
+      });
+      await conn.query(`CALL DOLT_CHECKOUT('${branch.replace(/'/g, "''")}')`);
+      await conn.end();
+      return true;
+    } catch {
+      return null;
+    }
+  }
+
+  private async checkoutBranchViaMysqlOrCli(
+    dataDir: string,
+    branch: string,
+    binaryPath: string,
+  ): Promise<void> {
+    const id = { repo: dataDir.split('/').pop() ?? 'unknown' } as LocalServerIdentity;
+    const viaMysql = await this.checkoutViaMysql(id, branch).catch(() => null);
+    if (viaMysql !== null) return;
+    await this.checkoutBranch(binaryPath, dataDir, branch);
+  }
+
+  async createBranch(id: LocalServerIdentity, name: string): Promise<void> {
+    if (!/^[A-Za-z0-9/_-]{1,64}$/.test(name))
+      throw new PushError('branch', `invalid branch name "${name}"`);
+    const branch = name.trim();
+    // Try MySQL wire first
+    try {
+      const mysql = await import('mysql2/promise');
+      const conn = await mysql.createConnection({
+        host: '127.0.0.1',
+        port: 3307,
+        user: 'root',
+        database: id.repo,
+        connectTimeout: 1200,
+      });
+      await conn.query(`CALL DOLT_BRANCH('${branch.replace(/'/g, "''")}')`);
+      await conn.end();
+      return;
+    } catch {}
+    const dataDir = computeLocalDataDir(this.deps.homeDir, id);
+    let dir = dataDir;
+    if (!existsSync(dir)) {
+      const fb = await this.findDataDirForRepo(id.repo);
+      if (fb) dir = fb;
+      else throw new CommitDataDirNotFoundError(id.repo);
+    }
+    const binaryPath = await this.deps.binaryManager.ensureInstalled();
+    const result = await runDoltCommand(binaryPath, ['--data-dir', dir, 'branch', branch], {
+      timeoutMs: 10_000,
+    });
+    if (result.exitCode !== 0)
+      throw new PushError('branch', result.stderr.trim() || result.stdout.trim());
+  }
+
+  async deleteBranch(id: LocalServerIdentity, name: string): Promise<void> {
+    const branch = name.trim();
+    try {
+      const mysql = await import('mysql2/promise');
+      const conn = await mysql.createConnection({
+        host: '127.0.0.1',
+        port: 3307,
+        user: 'root',
+        database: id.repo,
+        connectTimeout: 1200,
+      });
+      await conn.query(`CALL DOLT_BRANCH('-D', '${branch.replace(/'/g, "''")}')`);
+      await conn.end();
+      return;
+    } catch {}
+    const dataDir = computeLocalDataDir(this.deps.homeDir, id);
+    let dir = dataDir;
+    if (!existsSync(dir)) {
+      const fb = await this.findDataDirForRepo(id.repo);
+      if (fb) dir = fb;
+      else throw new CommitDataDirNotFoundError(id.repo);
+    }
+    const binaryPath = await this.deps.binaryManager.ensureInstalled();
+    const result = await runDoltCommand(binaryPath, ['--data-dir', dir, 'branch', '-d', branch], {
+      timeoutMs: 10_000,
+    });
+    if (result.exitCode !== 0)
+      throw new PushError('branch', result.stderr.trim() || result.stdout.trim());
+  }
+
+  async mergeBranches(
+    id: LocalServerIdentity,
+    source: string,
+    target?: string,
+  ): Promise<{ fastForward: boolean; conflicts: number }> {
+    const tgt = target ?? (await this.getCurrentBranch(id)) ?? 'main';
+    // Try wire first
+    try {
+      const mysql = await import('mysql2/promise');
+      const conn = await mysql.createConnection({
+        host: '127.0.0.1',
+        port: 3307,
+        user: 'root',
+        database: id.repo,
+        connectTimeout: 1500,
+      });
+      await conn.query(`CALL DOLT_CHECKOUT('${tgt.replace(/'/g, "''")}')`);
+      const [rows] = await conn.query(`CALL DOLT_MERGE('${source.replace(/'/g, "''")}')`);
+      const r = (rows as unknown as Array<Record<string, unknown>>)[0] as
+        | Record<string, unknown>
+        | undefined;
+      const arr = r ? [r] : (rows as Array<Record<string, unknown>>);
+      const first = Array.isArray(arr)
+        ? (arr[0] as Record<string, unknown>)
+        : (arr as unknown as Record<string, unknown>);
+      await conn.end();
+      return {
+        fastForward: Boolean(first?.fast_forward ?? first?.fastForward ?? 1),
+        conflicts: Number(first?.conflicts ?? 0),
+      };
+    } catch {}
+    // CLI fallback
+    const dataDir = computeLocalDataDir(this.deps.homeDir, id);
+    let dir = dataDir;
+    if (!existsSync(dir)) {
+      const fb = await this.findDataDirForRepo(id.repo);
+      if (fb) dir = fb;
+      else throw new CommitDataDirNotFoundError(id.repo);
+    }
+    const binaryPath = await this.deps.binaryManager.ensureInstalled();
+    await this.checkoutBranch(binaryPath, dir, tgt);
+    const result = await runDoltCommand(binaryPath, ['--data-dir', dir, 'merge', source], {
+      timeoutMs: 30_000,
+    });
+    if (result.exitCode !== 0) {
+      const conflicts = await this.readConflicts(binaryPath, dir);
+      if (conflicts.length > 0) return { fastForward: false, conflicts: conflicts.length };
+      throw new PushError('merge', result.stderr.trim() || result.stdout.trim());
+    }
+    return { fastForward: true, conflicts: 0 };
+  }
+
+  private async getCurrentBranch(id: LocalServerIdentity): Promise<string | null> {
+    try {
+      const mysql = await import('mysql2/promise');
+      const conn = await mysql.createConnection({
+        host: '127.0.0.1',
+        port: 3307,
+        user: 'root',
+        database: id.repo,
+        connectTimeout: 1000,
+      });
+      const [rows] = await conn.query('SELECT active_branch() AS b');
+      await conn.end();
+      const b = (rows as Array<Record<string, string>>)[0]?.b ?? null;
+      return b ? String(b) : null;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -401,8 +614,67 @@ export class VersioningLocalService {
    * `git branch -a`. The current branch is reported separately.
    */
   async listBranches(id: LocalServerIdentity): Promise<LocalBranchList> {
+    // Fast path: when sql-server is running, query via MySQL wire so we see
+    // the same current branch that `CALL DOLT_CHECKOUT` via MySQL just set.
+    // `dolt branch -a` CLI reads the filesystem and is stale while the
+    // server holds the DB in memory, and `dolt checkout` via CLI is blocked
+    // when the server is running.
+    try {
+      const mysql = await import('mysql2/promise');
+      const conn = await mysql.createConnection({
+        host: '127.0.0.1',
+        port: 3307,
+        user: 'root',
+        database: id.repo,
+        connectTimeout: 800,
+      });
+      const [bRows] = await conn.query('SELECT active_branch() AS b');
+      const current =
+        (bRows as Array<Record<string, string>>)[0]?.b ??
+        (bRows as Array<Record<string, string>>)[0]?.B ??
+        null;
+      const [rows] = await conn.query('SELECT name FROM dolt_branches');
+      await conn.end();
+      const local = (rows as Array<Record<string, string>>)
+        .map((r) => String(r.name ?? ''))
+        .filter(Boolean)
+        .filter((n) => !n.startsWith('origin/'));
+      const remote = (rows as Array<Record<string, string>>)
+        .map((r) => String(r.name ?? ''))
+        .filter((n) => n.startsWith('origin/'));
+      return { current: current ? String(current) : null, local, remote };
+    } catch {}
     const dataDir = computeLocalDataDir(this.deps.homeDir, id);
     if (!existsSync(dataDir)) {
+      const fb = await this.findDataDirForRepo(id.repo);
+      if (fb) {
+        // Retry via CLI with fallback dir
+        const binaryPath = await this.deps.binaryManager.ensureInstalled();
+        const result = await runDoltCommand(binaryPath, ['--data-dir', fb, 'branch', '-a'], {
+          timeoutMs: 10_000,
+        });
+        if (result.exitCode !== 0)
+          throw new PushError('branch', result.stderr.trim() || result.stdout.trim());
+        const local: string[] = [];
+        const remote: string[] = [];
+        let current: string | null = null;
+        for (const raw of result.stdout.split('\n')) {
+          const line = raw.trimEnd();
+          if (!line.trim()) continue;
+          const isCurrent = line.startsWith('*');
+          const name = line
+            .replace(/^[*]\s+/, '')
+            .replace(/^\s+/, '')
+            .trim();
+          if (!name) continue;
+          if (name.startsWith('origin/')) remote.push(name);
+          else {
+            local.push(name);
+            if (isCurrent) current = name;
+          }
+        }
+        return { current, local, remote };
+      }
       throw new CommitDataDirNotFoundError(id.repo);
     }
     const binaryPath = await this.deps.binaryManager.ensureInstalled();
