@@ -9,6 +9,22 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.8.1] - 2026-09-03
+
+**In plain terms:** The previous update (0.8.0) broke a critical thing on Windows: the tool lost track of where your data actually lives on disk, so one of the daily commands (`start`) could no longer turn on the local server, and a couple of others crashed with an obscure message instead of doing their job. This patch puts those back: the tool now finds your data folder correctly on every operating system, the commands that were crashing show the real, readable error again, and the progress check now reports the correct process number when it finds the server already running. No new features — just fixing what the last update unintentionally broke.
+
+### Fixed
+
+- **`deltix start` no longer resolves the data folder to a broken path on Windows.** The last update had left a leftover developer path (`/home/sammy/.deltix`) as the fallback for where your local data lives. On Windows that got stitched onto the current folder, producing a nonsense path like `...\src\home\sammy\.deltix\projects\...` and failing with `LocalRepoInitError: dir does not exist`. The tool now asks the operating system for the real user home directory (`%USERPROFILE%` on Windows, `~` elsewhere) and builds the data path from that, so `start` again finds `~/.deltix/projects/...`.
+- **Server commands no longer crash with a programming error and hide the real message.** `handleSyncError` (used by `push`, `pull`, `fetch`, `clone`, `remote`) referenced error types and a printing helper it never imported, so a genuine failure like "target commit not found" was masked by `ReferenceError: NoProjectError is not defined`. All missing imports were restored. The same class of missing-import crash in `login`/`logout`/`whoami` and `push` (missing `createSessionService`, `resolveServerIdentity`, error types, and the password prompt helper) is fixed too.
+- **`deltix status` reports the real process id for a healthy orphaned server again.** When the local SQL server was already running but outside the tool's tracking (e.g. lifted manually with the bundled `dolt`, or adopted with recorded pid `-1`), `status` reported `pid: -1` even though the server answered SQL fine. It now discovers the actual PID (`netstat` on Windows / `lsof` elsewhere) and records it on adoption, so a healthy server shows its real process number.
+
+### Tests
+
+- Unit suite passes: 128 tests, 0 failures.
+- `bun run lint` exits 0 on the touched files (only pre-existing low-severity complexity warnings remain).
+- Confirmed by `tsc --noEmit`: no remaining `Cannot find name` (runtime `ReferenceError`) errors anywhere in `src/`.
+
 ## [0.8.0] - 2026-09-03
 
 **In plain terms:** A big internal cleanup — the entire command-line tool was carved into small, separate building blocks so it is easier to maintain, test and extend without breaking the daily workflows. On top of that, long-running commands like `push`, `pull`, `fetch`, `clone` and `import` now show progress feedback while they work instead of hanging silently, and the docs explain how the tool pairs cleanly with git without interfering with it.
