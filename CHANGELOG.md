@@ -9,6 +9,22 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.7.27] - 2026-08-31
+
+**In plain terms:** Big cleanup for maintainability — no more magic numbers, all docs in English, and pretty animated demos.
+
+### Changed
+
+- **Refactor: high cohesion / low coupling.** New `src/ports/` (`DoltSqlPort`, `LocalRepoPort`), `src/adapters/` (`DoltMysqlAdapter` fast wire, `DoltCliAdapter` fallback), `src/core/` pure functions (`table-name`, `csv`), `src/shared/constants.ts` for ports/timeouts/branches. `contexts/` now depends on `ports/`, never on `mysql2` directly. Change adapter without touching context.
+- **No magic numbers/strings.** All `3306/3307/9090`, `main`, `origin/`, timeouts now from `constants.ts`.
+- **Early returns as guard clauses** where it made sense; `csv` kept as state machine.
+- **No local DB (Turso/bun:sqlite).** Client has no tables — Dolt is the DB. Adding `libsql` would break `bun build --compile` cross-OS.
+
+### Added
+
+- **Animated demos** `assets/demo-*.gif` (4) + `assets/tapes/*.tape` — isolated `/tmp/demo-hello`, no sensitive data, re-record with `vhs assets/tapes/*.tape`. README now shows `quickstart`/`branch`/`status`/`drizzle` flows.
+- **Beautiful README** — capsule-render waving header/footer, demo GIFs, mermaid workflow, collapsible commands, architecture `ports → core → adapters → contexts`.
+
 ## [0.7.26] - 2026-08-31
 
 **In plain terms:** `deltix` now does branches, checkouts and merges locally — no need to touch `dolt` directly. Daily use is 100% `deltix`.
