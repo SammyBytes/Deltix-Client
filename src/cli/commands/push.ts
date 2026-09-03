@@ -1,8 +1,7 @@
+import { createVersioningService } from '../../contexts/versioning';
 import { newLocalService } from '../helpers';
 import { handleSyncError } from '../helpers/handle-sync-error';
-import { printError, printInfo, printSuccess } from '../output';
-import { createVersioningService } from '../../contexts/versioning';
-import { NoProjectError, CommitDataDirNotFoundError, LocalRepoInitError, InsufficientRoleError, RepoNotFoundError, ValidationError } from '../../contexts/local-project';
+import { printSuccess } from '../output';
 
 export async function runPush(args: string[]): Promise<number> {
   const [repoArg] = args;

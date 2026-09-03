@@ -3,7 +3,13 @@
  * Exports pure functions so commands stay thin and testable.
  */
 
-export { splitPositionalsAndFlags, flagValue, parseFlagValue, normalizeTables } from './args';
-export { branchUsage, logMergeConflict, resolveRepo, resolveRepoAndName, resolveServerIdentity } from './repo';
-export { newLocalService } from './newLocalService';
+export { flagValue, normalizeTables, parseFlagValue, splitPositionalsAndFlags } from './args';
 export { handleSyncError } from './handle-sync-error';
+export { newLocalService } from './newLocalService';
+export {
+  branchUsage,
+  logMergeConflict,
+  resolveRepo,
+  resolveRepoAndName,
+  resolveServerIdentity,
+} from './repo';

@@ -1,6 +1,6 @@
 import { createLocalProjectService, NoProjectError } from '../../contexts/local-project';
-import { printError, printTable } from '../output';
 import type { MergeConflictError } from '../../contexts/versioning/errors';
+import { printError, printTable } from '../output';
 
 export function branchUsage(): number {
   printError('Usage: deltix branch <list|local|create|checkout|delete|current> [repo] [name]');
@@ -8,11 +8,16 @@ export function branchUsage(): number {
 }
 
 export function logMergeConflict(err: MergeConflictError): void {
-  printError(`Merge failed with conflicts (source=${err.sourceBranch}, target=${err.targetBranch})`);
+  printError(
+    `Merge failed with conflicts (source=${err.sourceBranch}, target=${err.targetBranch})`,
+  );
   printTable(err.conflicts.map((c) => ({ table: c.table, count: c.count })));
 }
 
-export async function resolveRepo(repoArg: string | undefined, usage: string): Promise<string | null> {
+export async function resolveRepo(
+  repoArg: string | undefined,
+  usage: string,
+): Promise<string | null> {
   if (repoArg) return repoArg;
   try {
     const project = await createLocalProjectService().resolve(process.cwd());
@@ -43,7 +48,10 @@ export async function resolveRepoAndName(
 export async function resolveServerIdentity(
   repoArg: string | undefined,
 ): Promise<{ repo: string; projectRoot?: string } | null> {
-  const tryResolveProjectRoot = async (): Promise<{ repo: string; projectRoot?: string } | null> => {
+  const tryResolveProjectRoot = async (): Promise<{
+    repo: string;
+    projectRoot?: string;
+  } | null> => {
     try {
       const project = await createLocalProjectService().resolve(process.cwd());
       return { repo: project.config.repo, projectRoot: project.root };

@@ -114,7 +114,7 @@ describe('session/session.service (unit, fake adapter + real credentials file)',
     const dir = await mkdtemp(join(tmpdir(), 'deltix-session-'));
     let refreshCallCount = 0;
     const adapter = fakeAdapter({
-      refresh: async (token: string) => {
+      refresh: async (_token: string) => {
         refreshCallCount += 1;
         return {
           accessToken: `access-${refreshCallCount}`,

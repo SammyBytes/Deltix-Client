@@ -7,7 +7,7 @@
  * — add new variables here, never read `Bun.env` ad-hoc elsewhere.
  */
 import { z } from 'zod';
-import { DEFAULT_DOLT_PORT, DEFAULT_MYSQL_PORT, DEFAULT_SERVER_URL } from './constants';
+import { DEFAULT_MYSQL_PORT, DEFAULT_SERVER_URL } from './constants';
 
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),

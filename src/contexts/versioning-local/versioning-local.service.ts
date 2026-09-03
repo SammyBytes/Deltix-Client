@@ -6,10 +6,8 @@ import { runDoltCommand } from '../../acl/dolt-exec';
 import { parseCsvLine } from '../../core/csv';
 import { escapeSql, SAFE_TABLE_RE, sanitizeAuthor, sqlLiteral } from '../../core/table-name';
 import {
-  BRANCH_NAME_RE,
   DEFAULT_BRANCH,
   DEFAULT_COMMIT_AUTHOR,
-  DEFAULT_COMMIT_EMAIL_DOMAIN,
   DEFAULT_DOLT_PORT,
   REMOTE_TRACKING_PREFIX,
   TIMEOUT,
@@ -411,37 +409,6 @@ export class VersioningLocalService {
     } catch {
       return false;
     }
-  }
-
-  private async checkoutViaMysql(id: LocalServerIdentity, branch: string): Promise<boolean | null> {
-    try {
-      const env = await import('../mysql-embedded/mysql-embedded.service');
-      // We don't have host/port here — try default 127.0.0.1:DEFAULT_DOLT_PORT via mysql
-      const mysql = await import('mysql2/promise');
-      const conn = await mysql.createConnection({
-        host: '127.0.0.1',
-        port: DEFAULT_DOLT_PORT,
-        user: 'root',
-        database: id.repo,
-        connectTimeout: 1200,
-      });
-      await conn.query(`CALL DOLT_CHECKOUT('${branch.replace(/'/g, "''")}')`);
-      await conn.end();
-      return true;
-    } catch {
-      return null;
-    }
-  }
-
-  private async checkoutBranchViaMysqlOrCli(
-    dataDir: string,
-    branch: string,
-    binaryPath: string,
-  ): Promise<void> {
-    const id = { repo: dataDir.split('/').pop() ?? 'unknown' } as LocalServerIdentity;
-    const viaMysql = await this.checkoutViaMysql(id, branch).catch(() => null);
-    if (viaMysql !== null) return;
-    await this.checkoutBranch(binaryPath, dataDir, branch);
   }
 
   async createBranch(id: LocalServerIdentity, name: string): Promise<void> {
