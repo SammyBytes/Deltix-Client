@@ -296,6 +296,74 @@ sudo bash get-deltix.sh
 
 ---
 
+## 8. Updating Deltix
+
+Keeping Deltix up to date is simple. The **client** and the **server** are two
+**independent** pieces — each has its own version and its own update step. You
+usually only update the one that changed.
+
+### 8.1 — Update the client (`deltix`) on Windows
+
+There is no installer to uninstall first — the client is a single executable
+file. To update, just **replace the old binary with the new one**:
+
+1. Go to the **Deltix-Client releases** page and download `deltix-windows-x64.exe`
+   for the new version.
+2. Close any open terminal that uses `deltix`.
+3. Overwrite the installed file. If you put it in `$HOME\bin` (the default
+   from section 4), in PowerShell:
+
+```powershell
+Move-Item ~\Downloads\deltix-windows-x64.exe ~\bin\deltix.exe -Force
+```
+
+4. Open a new terminal and confirm the new version:
+
+```powershell
+deltix version
+```
+
+> On Windows, if you already have a window open with `deltix` running (for
+> example `deltix start` feeding an app), the replace may fail with
+> `being used by another process`. Close that terminal first, then retry.
+
+### 8.2 — Update the client on Linux / macOS
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/SammyBytes/Deltix-Client/main/scripts/get-deltix-client.sh | bash
+```
+or, if you installed it manually into `~/bin`:
+
+```bash
+mv ~/Downloads/deltix-linux-x64 ~/bin/deltix && chmod +x ~/bin/deltix
+deltix version
+```
+
+### 8.3 — Does the server need to be updated?
+
+**Not just because the client updated.** The two version numbers are
+independent:
+
+- The client talks to the Deltix-Server over its REST API. As long as your
+  server is running and reachable, an older **or** newer client keeps working.
+- You only need to update the **server** when you want the features/fixes that
+  shipped in a **server** release, or when a release note tells you they must
+  be updated together.
+
+**To update the server** (Linux/macOS), run the installer again — it upgrades
+in place:
+
+```bash
+sudo bash get-deltix.sh
+```
+
+**Rule of thumb:** after updating the client, run `deltix version` (shows your
+client version) and `deltix status` (shows `running + branch`) to sanity-check
+that the client still talks to your server. If a brand-new server feature is
+missing, upgrade the server too.
+
+---
+
 ## ADVANCED SECTION (for people who want to customize)
 
 > Everything below is optional. If the simple path works for you, you do not

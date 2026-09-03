@@ -325,6 +325,41 @@ Full rules in [`.github/copilot-instructions.md`](./.github/copilot-instructions
 
 ---
 
+## Dependencies (automated updates)
+
+[Dependabot](https://docs.github.com/en/code-security/dependabot) keeps the
+project's dependencies patched automatically. It is configured in
+[`.github/dependabot.yml`](./.github/dependabot.yml) and covers:
+
+- **npm** — runtime + dev dependencies (`zod`, `mysql2`, `consola`, `@biomejs/biome`, …), grouped into a single `minor-and-patch` PR each update.
+- **GitHub Actions** — pinned action versions (`actions/checkout`, `softprops/action-gh-release`, …).
+- **Docker** — base images.
+
+### Handling a Dependabot PR
+
+1. Open the PR and look at the `test` CI check.
+2. **If the check fails with `lockfile had changes, but lockfile is frozen`**,
+   the `bun.lock` was not regenerated for the bumped version. Fix it by
+   checking out the PR branch and running `bun install`, then commit the
+   regenerated `bun.lock`:
+
+   ```bash
+   git fetch origin <dependabot-branch>
+   git checkout <dependabot-branch>
+   bun install        # updates bun.lock for the new versions
+   git add bun.lock && git commit -m "chore(deps): regenerate bun.lock"
+   git push origin <dependabot-branch>
+   ```
+
+3. Confirm `bun run lint` exits 0 and `bun run test:unit` is green on the
+   updated branch, then merge the PR.
+
+Minor/patch bumps are grouped on purpose: they are low-risk and should largely
+"just work". A pre-release/security-critical bump still lands as its own PR so
+it can be reviewed and shipped faster.
+
+---
+
 ## Stack & security
 
 | | |
