@@ -9,6 +9,20 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.8.6] - 2026-09-04
+
+**In plain terms:** Last round we stopped the pull from overwriting your unsaved local work. But there was still a real problem: if your copy was fully saved and the pull hit a snag halfway through, it could still leave your data damaged — some tables changed, others not, with no way back. Now, when a pull fails partway through with a clean working copy, it fully undoes the partial changes: your tables are put back exactly as they were before you pulled. This round also makes pulling more robust for tables that contain empty dates, which previously made the pull stop with a confusing error.
+
+### Fixed
+
+- **A failed pull now truly restores the working tree, not just the branch head.** The atomic apply already worked on a throwaway branch, but Dolt carries uncommitted working-set changes (the `TRUNCATE`/reload that each table application performs) along when switching branches — so a plain `checkout` back to the real branch did not undo partial damage: a table with rows could be left emptied when a later commit in the batch failed. On failure the pull now returns to the real branch **and resets the recreated tables from that branch's HEAD** (`dolt checkout <branch> -- <tables>`), so a clean-working-copy pull that fails halfway leaves every table exactly as it was.
+- **`pull` reloads each pulled table with the same fast, type-safe bulk import the server uses** (`dolt table import -r` with the hand-off CSV) instead of one row-at-a-time `INSERT` per row. This matters in two ways: it is dramatically faster for large tables, and it treats an empty string in a `DATETIME` column as `NULL` exactly as the source wrote it — eliminating the `Incorrect datetime value: ''` failure that stopped a pull of a table containing a row with an empty datetime (the `accounts` import failure reported in #57).
+
+### Tests
+
+- Unit suite passes: 131 tests, 0 failures.
+- New real-Dolt integration test: with a clean working tree, a batch whose second commit fails (and whose first commit recreated a table) leaves that table restored to its original rows — proving the working tree rollback, not just the branch head, on failure.
+
 ## [0.8.5] - 2026-09-04
 
 **In plain terms:** The previous update made pulling apply changes as one unit, so a failed pull no longer left a half-updated copy. But if your local copy had its own recently-made changes that weren't saved yet, the pull could still overwrite them. Now, before a `pull` touches your tables, it checks whether you have unsaved local changes in those exact tables — and if you do, it tells you to save them first instead of silently wiping them. Your local work is never overwritten by a pull anymore.

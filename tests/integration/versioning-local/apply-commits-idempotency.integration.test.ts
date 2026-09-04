@@ -212,4 +212,72 @@ describe.if(doltAvailable)('applyCommits() idempotency (real dolt binary)', () =
     expect(rows.stdout.toString().trim().split('\n').slice(1)).toEqual(['7', '99']);
     expect(await commitCount(dataDir)).toBe(countBefore + 1);
   });
+
+  it("restores a recreated table's rows when a later commit in the batch fails (clean working tree)", {
+    timeout: 30000,
+  }, async () => {
+    const service = localService(homeDir);
+
+    // Seed `rollback_t` with two committed rows.
+    await service.applyCommits(identity, BRANCH, [
+      {
+        hash: 'fakehash-rollback-seed',
+        message: 'seed rollback_t',
+        author: 'deltix',
+        tables: [
+          {
+            name: 'rollback_t',
+            schema: 'CREATE TABLE `rollback_t` (`id` int NOT NULL, PRIMARY KEY (`id`));',
+            data: 'id\n1\n2\n',
+          },
+        ],
+      },
+    ]);
+    const before =
+      await $`${DOLT_BIN} --data-dir ${dataDir} sql -q "SELECT id FROM rollback_t" -r csv`
+        .quiet()
+        .nothrow();
+    expect(before.stdout.toString().trim().split('\n').slice(1)).toEqual(['1', '2']);
+
+    // First commit recreates `rollback_t` with different rows (drops 1,2);
+    // the second commit fails (unsafe table name). The batch must fail and the
+    // working tree must be rolled back to rows 1,2 — not left at the half-applied
+    // `rollback_t` from the first commit.
+    const commits: LocalCommitWithData[] = [
+      {
+        hash: 'fakehash-rollback-recreate',
+        message: 'recreate rollback_t',
+        author: 'deltix',
+        tables: [
+          {
+            name: 'rollback_t',
+            schema: 'CREATE TABLE `rollback_t` (`id` int NOT NULL, PRIMARY KEY (`id`));',
+            data: 'id\n9\n',
+          },
+        ],
+      },
+      {
+        hash: 'fakehash-rollback-bad',
+        message: 'bad',
+        author: 'deltix',
+        tables: [
+          {
+            name: 'evil; DROP TABLE rollback_t; --',
+            schema: 'CREATE TABLE `x` (`id` int);',
+            data: 'id\n1\n',
+          },
+        ],
+      },
+    ];
+
+    await expect(service.applyCommits(identity, BRANCH, commits)).rejects.toThrow();
+
+    // rollback_t must have been restored to its committed rows (1,2), proving
+    // the failed pull did not leave the recreated (9-only) state behind.
+    const after =
+      await $`${DOLT_BIN} --data-dir ${dataDir} sql -q "SELECT id FROM rollback_t" -r csv`
+        .quiet()
+        .nothrow();
+    expect(after.stdout.toString().trim().split('\n').slice(1)).toEqual(['1', '2']);
+  });
 });

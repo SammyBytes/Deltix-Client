@@ -3,8 +3,7 @@ import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runDoltCommand } from '../../acl/dolt-exec';
-import { parseCsvLine } from '../../core/csv';
-import { escapeSql, SAFE_TABLE_RE, sanitizeAuthor, sqlLiteral } from '../../core/table-name';
+import { escapeSql, SAFE_TABLE_RE, sanitizeAuthor } from '../../core/table-name';
 import {
   DEFAULT_BRANCH,
   DEFAULT_COMMIT_AUTHOR,
@@ -778,18 +777,39 @@ export class VersioningLocalService {
       throw new PushError('checkout', checkout.stderr.trim() || checkout.stdout.trim());
     }
 
-    const restore = async (): Promise<void> => {
-      // Leave the temp branch and return to the real branch, restoring its
-      // working tree. From the (now-deleted) temp branch the checkout reflects
-      // the real branch's committed state; if the real branch was only
-      // advanced on the success path, an abort goes back to the original head.
+    // Dolt keeps the *uncommitted working set* when switching branches, so a
+    // plain `checkout` cannot undo what importTable wrote into the working
+    // tree on the throwaway branch — those TRUNCATE/INSERT changes ride along
+    // back to the real branch. To truly restore, after returning to `branch`
+    // we reset the touched tables from that branch's HEAD with
+    // `dolt checkout <branch> -- <tables>` (the Dolt equivalent of
+    // `git checkout -- <files>`).
+    const restore = async (rollbackTables: string[] = []): Promise<void> => {
       const back = await runDoltCommand(binaryPath, ['--data-dir', dataDir, 'checkout', branch], {
         timeoutMs: TIMEOUT.DOLT_BRANCH,
       });
       if (back.exitCode !== 0) {
         throw new PushError('checkout', back.stderr.trim() || back.stdout.trim());
       }
-      // Best-effort cleanup of the throwaway branch.
+      // Only tables that could actually have been imported are safe to reset
+      // (their names passed SAFE_TABLE_RE). Unsafe names never got created, so
+      // they wouldn't be valid Dolt identifiers to pass to `checkout --` anyway.
+      const safeRollback = rollbackTables.filter((t) => SAFE_TABLE_RE.test(t));
+      if (safeRollback.length > 0) {
+        const reset = await runDoltCommand(
+          binaryPath,
+          ['--data-dir', dataDir, 'checkout', branch, '--', ...safeRollback],
+          { timeoutMs: TIMEOUT.DOLT_BRANCH },
+        );
+        if (reset.exitCode !== 0) {
+          throw new PushError(
+            'checkout',
+            `${reset.stderr.trim() || reset.stdout.trim()} (could not restore ${safeRollback.join(', ')})`,
+          );
+        }
+      }
+      // Best-effort cleanup of the throwaway branch. Runs last so a reset
+      // failure above still removes the branch.
       await runDoltCommand(binaryPath, ['--data-dir', dataDir, 'branch', '-D', tempBranch], {
         timeoutMs: TIMEOUT.DOLT_BRANCH,
       }).catch(() => {});
@@ -850,9 +870,10 @@ export class VersioningLocalService {
       await restore();
       return tempHead;
     } catch (err) {
-      // Restore the real branch's working tree (checkout) and drop the temp
-      // branch so the repo is exactly as it was before the pull attempt.
-      await restore().catch(() => {});
+      // Restore the real branch's working tree (checkout + reset the touched
+      // tables from HEAD) and drop the temp branch, so the repo is exactly as
+      // it was before the pull attempt.
+      await restore(touched).catch(() => {});
       throw err;
     }
   }
@@ -1058,37 +1079,51 @@ export class VersioningLocalService {
       }
     }
 
-    const lines = table.data
-      .replace(/\r/g, '')
-      .split('\n')
-      .filter((l) => l.length > 0);
-    if (lines.length <= 1) {
-      return; // header only → table created/emptied, no rows
-    }
-    const columns = parseCsvLine(lines[0] ?? '');
-    for (let i = 1; i < lines.length; i++) {
-      const values = parseCsvLine(lines[i] ?? '');
-      if (values.length !== columns.length) {
-        throw new PushError(
-          'import',
-          `row ${i} of ${table.name} has ${values.length} cols, expected ${columns.length}`,
+    // Reload rows with `dolt table import -r` instead of per-row INSERT
+    // statements. Import parses the CSV exactly as Dolt wrote it, so type
+    // coercion is precise: an empty string lands as NULL in a DATETIME column,
+    // which an INSERT statement would reject with "Incorrect datetime value:
+    // ''" (the exact failure when a source row carries an empty datetime).
+    // It also avoids O(rows) subprocess spawns for large tables.
+    const bodyLines = table.data.split('\n').filter((l) => l.length > 0);
+    if (bodyLines.length > 1) {
+      const tmp = join(
+        tmpdir(),
+        `deltix-pull-${process.pid}-${Math.random().toString(36).slice(2)}.csv`,
+      );
+      await writeFile(tmp, table.data);
+      try {
+        const imp = await runDoltCommand(
+          binaryPath,
+          ['--data-dir', dataDir, 'table', 'import', '-r', table.name, tmp],
+          { timeoutMs: TIMEOUT.DOLT_IMPORT },
         );
+        if (imp.exitCode !== 0) {
+          throw new PushError(`import ${table.name}`, imp.stderr.trim() || imp.stdout.trim());
+        }
+      } finally {
+        await rm(tmp, { force: true });
       }
-      const cols = columns.map((c) => `\`${c}\``).join(', ');
-      const vals = values.map(sqlLiteral).join(', ');
-      const insert = await runDoltCommand(
+    }
+
+    // `dolt table import` does not carry the source's AUTO_INCREMENT counter
+    // (same as in bulkImportTables); re-assert it after loading so the next
+    // omit-PK INSERT starts from the source's next-ID value.
+    const autoIncrement = /AUTO_INCREMENT=(\d+)/i.exec(table.schema)?.[1];
+    if (autoIncrement) {
+      const fixAi = await runDoltCommand(
         binaryPath,
         [
           '--data-dir',
           dataDir,
           'sql',
           '-q',
-          `INSERT INTO ${table.name} (${cols}) VALUES (${vals})`,
+          `ALTER TABLE ${table.name} AUTO_INCREMENT = ${autoIncrement}`,
         ],
         { timeoutMs: TIMEOUT.DOLT_COMMIT },
       );
-      if (insert.exitCode !== 0) {
-        throw new PushError(`insert ${table.name}`, insert.stderr.trim());
+      if (fixAi.exitCode !== 0) {
+        throw new PushError(`auto_increment ${table.name}`, fixAi.stderr.trim());
       }
     }
   }
