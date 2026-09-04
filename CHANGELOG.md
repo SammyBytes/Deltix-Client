@@ -9,6 +9,41 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.8.11] - 2026-09-04
+
+**In plain terms:** when `pull`/`fetch` say "already up to date", there was
+no way to double-check whether that was actually true — you had to just
+trust it. This made a real corrupted-tracking-ref scenario look
+suspicious/unverifiable from the outside during testing. Fixed: `pull` and
+`fetch` now show exactly which local branch and which commit they compared
+against whenever they report "up to date" / "no new commits", so this can
+be checked independently instead of taken on faith.
+
+### Changed
+
+- `deltix pull`/`deltix fetch`'s "Already up to date" / "No new commits"
+  messages now print the branch name, the local branch head, and the
+  hash they compared it against (`comparedAgainst`), instead of a bare
+  informational line. This doesn't change any sync logic — it only makes
+  an already-correct decision visible for verification.
+
+### Investigation note (issue #57)
+
+- A follow-up report claimed a "false positive up to date": the user's
+  `sync-develop-base` HEAD didn't match `origin/main`. This is expected —
+  `origin/main` is the remote-tracking ref for the (unrelated, previously
+  corrupted-then-deleted) `main` branch, not for `sync-develop-base`.
+  `pull`/`fetch` on `sync-develop-base` compare against
+  `origin/sync-develop-base` (or the persisted per-branch sync state), and
+  never touch `origin/main`. This release's new output is meant to make
+  that distinction directly visible next time, instead of requiring a
+  manual `dolt log <ref>` cross-check against the wrong ref.
+
+### Tests
+
+- Full unit suite (136 tests) passes; no new typecheck errors beyond the
+  same pre-existing unrelated ones already present on `main`.
+
 ## [0.8.10] - 2026-09-04
 
 **In plain terms:** even after the 0.8.9 self-heal fix, `pull`/`fetch` could

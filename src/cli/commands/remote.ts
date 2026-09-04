@@ -123,7 +123,15 @@ export async function runPull(args: string[]): Promise<number> {
         // ever touching origin/<branch> here.
         await local.saveSyncState(identity, branch, serverHead);
       }
-      printInfo(`Already up to date for ${identity.repo}`);
+      // Surface exactly what was compared, so an "up to date" result can be
+      // independently verified (e.g. against `dolt log <branch> -n 1`)
+      // instead of taken on faith — see issue #57 for a case where a stale
+      // remote-tracking ref made this claim look suspicious from the outside.
+      printSuccess(`Already up to date for ${identity.repo}`, {
+        branch,
+        head: localHead,
+        comparedAgainst: from,
+      });
       return 0;
     }
     const head = await withSpinner('Applying pulled commits', () =>
@@ -171,7 +179,7 @@ export async function runFetch(args: string[]): Promise<number> {
         // the raw Dolt ref on the next negotiation.
         await local.saveSyncState(identity, branch, serverHead);
       }
-      printInfo(`No new commits for ${identity.repo}`);
+      printSuccess(`No new commits for ${identity.repo}`, { branch, comparedAgainst: from });
       return 0;
     }
     // Materialize onto origin/<branch>; leave the working branch untouched.
