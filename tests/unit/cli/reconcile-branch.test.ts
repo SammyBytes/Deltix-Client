@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { reconcileBranch } from '../../../src/cli/commands/remote';
@@ -32,10 +32,7 @@ describe('cli/commands/remote reconcileBranch (unit)', () => {
         getCurrentBranch: async () => 'sync-develop-base',
       } as unknown as VersioningLocalService;
 
-      const branch = await reconcileBranch(
-        { repo: 'hmc-sync', branch: 'main' },
-        fakeLocal,
-      );
+      const branch = await reconcileBranch({ repo: 'hmc-sync', branch: 'main' }, fakeLocal);
 
       expect(branch).toBe('sync-develop-base');
 
@@ -85,10 +82,7 @@ describe('cli/commands/remote reconcileBranch (unit)', () => {
         getCurrentBranch: async () => null,
       } as unknown as VersioningLocalService;
 
-      const branch = await reconcileBranch(
-        { repo: 'hmc-sync', branch: 'main' },
-        fakeLocal,
-      );
+      const branch = await reconcileBranch({ repo: 'hmc-sync', branch: 'main' }, fakeLocal);
 
       expect(branch).toBe('main');
     } finally {
