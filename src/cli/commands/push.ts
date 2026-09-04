@@ -4,6 +4,7 @@ import { handleSyncError } from '../helpers/handle-sync-error';
 import { resolveServerIdentity } from '../helpers/repo';
 import { printInfo, printSuccess } from '../output';
 import { withSpinner } from '../spinner';
+import { reconcileBranch } from './remote';
 
 export async function runPush(args: string[]): Promise<number> {
   const [repoArg] = args;
@@ -15,7 +16,7 @@ export async function runPush(args: string[]): Promise<number> {
   try {
     const localService = await newLocalService();
 
-    const branch = identity.branch;
+    const branch = await reconcileBranch(identity, localService);
     const commits = await withSpinner('Reading unpushed commits', () =>
       localService.getUnpushedCommits(identity, branch),
     );
@@ -29,7 +30,7 @@ export async function runPush(args: string[]): Promise<number> {
 
     const result = await withSpinner(
       `Pushing ${commits.length} commit(s) to ${identity.repo}`,
-      () => createVersioningService().pushCommits(identity.repo, commits, from),
+      () => createVersioningService().pushCommits(identity.repo, commits, from, branch),
     );
 
     await withSpinner('Advancing remote ref', async () => {

@@ -573,7 +573,7 @@ export class VersioningLocalService {
     return { fastForward: true, conflicts: 0 };
   }
 
-  private async getCurrentBranch(id: LocalServerIdentity): Promise<string | null> {
+  async getCurrentBranch(id: LocalServerIdentity): Promise<string | null> {
     try {
       const mysql = await import('mysql2/promise');
       const conn = await mysql.createConnection({

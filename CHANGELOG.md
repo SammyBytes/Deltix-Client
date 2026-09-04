@@ -9,6 +9,56 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.8.9] - 2026-09-04
+
+**In plain terms:** v0.8.8 fixed `pull`/`push`/`fetch` to respect whatever
+branch you actually checked out — but only for branch switches made *after*
+installing that fix. If you had switched to a non-default branch (like
+`sync-develop-base`) *before* upgrading, the CLI's saved project settings
+still secretly remembered the old default branch (`main`). After upgrading
+to 0.8.8, `pull` stopped crashing — but it silently started operating on
+`main` instead of your real branch, replaying old history on top of it and
+overwriting data with no error at all. Fixed: the CLI now double-checks
+which branch is actually active before every `pull`/`push`/`fetch`, and
+fixes its saved settings automatically if they were out of date — so this
+self-heals on your very next sync, no manual steps needed.
+
+### Fixed
+
+- **Stale pre-existing project configs no longer cause `pull`/`push`/`fetch`
+  to silently operate on the wrong branch.** Root cause: any project bound
+  or checked out *before* v0.8.8 shipped never had its real branch written
+  to `.deltix/config.toml` (that persistence was only added in 0.8.8), so
+  the file was left holding the schema's default value (`'main'`) even
+  though the user had genuinely been working on a different branch the
+  whole time on disk. After upgrading to 0.8.8, the CLI faithfully read
+  that stale `main` value and operated on it — landing commits that were
+  already part of the user's real history back onto `main` under new
+  hashes, overwriting at least one column with `NULL` and dropping a row
+  from `__hbsmigrationhistory`, all while reporting success (exit 0).
+- Added `reconcileBranch()` in `src/cli/commands/remote.ts`, used by
+  `runPull()`, `runFetch()`, and `runPush()`: before touching any commits,
+  it asks the running local Dolt server what branch is *actually* checked
+  out (`VersioningLocalService.getCurrentBranch()`, now public) and, if
+  that disagrees with the saved config, trusts the real on-disk branch and
+  rewrites `.deltix/config.toml` to match — so this only needs to happen
+  once per affected project, on its next sync.
+- If no local server is reachable, reconciliation safely no-ops and falls
+  back to the previously saved branch (same behavior as before this fix)
+  rather than failing the command.
+
+### Tests
+
+- New unit tests (`tests/unit/cli/reconcile-branch.test.ts`) cover: (1) a
+  stale config (`branch: 'main'`) with a different branch actually checked
+  out (`sync-develop-base`) — asserts the real branch wins and gets
+  persisted for next time; (2) config already matching the real branch —
+  no-op; (3) no local server reachable — falls back to the saved config
+  value unchanged. Full unit suite (136 tests) passes; pre-existing
+  integration test failure in
+  `push-pull-roundtrip.integration.test.ts` (unrelated Bun shell/CLI
+  quoting issue) confirmed present on `main` before this change too.
+
 ## [0.8.8] - 2026-09-04
 
 **In plain terms:** if you ever switched your project to a branch other

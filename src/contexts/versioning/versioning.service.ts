@@ -152,12 +152,14 @@ export class VersioningService {
     repoId: string,
     commits: ImportedCommit[],
     from: string | null = null,
+    branch?: string,
   ): Promise<PushCommitsResult> {
     return this.versioningApi.pushCommits(
       await this.sessionService.mintAccessToken(),
       repoId,
       commits,
       from,
+      branch,
     );
   }
 

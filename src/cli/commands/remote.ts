@@ -1,13 +1,49 @@
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { createLocalProjectService } from '../../contexts/local-project';
+import { createLocalProjectService, NoProjectError } from '../../contexts/local-project';
+import type { LocalServerIdentity } from '../../contexts/mysql-embedded';
 import { createVersioningService } from '../../contexts/versioning';
+import type { VersioningLocalService } from '../../contexts/versioning-local';
 import { DEFAULT_BRANCH } from '../../shared/constants';
 import { handleSyncError } from '../helpers/handle-sync-error';
 import { newLocalService } from '../helpers/newLocalService';
-import { resolveServerIdentity } from '../helpers/repo';
+import { resolveServerIdentity, type ServerIdentity } from '../helpers/repo';
 import { printError, printInfo, printSuccess } from '../output';
 import { withSpinner } from '../spinner';
+
+/**
+ * Reconciles the branch used for `pull`/`fetch` with what is actually
+ * checked out on disk.
+ *
+ * `identity.branch` comes from `.deltix/config.toml`, but for a project that
+ * was bound/checked-out *before* the CLI started persisting the checked-out
+ * branch (v0.8.8), that file can still hold the schema default (`main`)
+ * while the working copy has genuinely been on a different branch (e.g.
+ * `sync-develop-base`) the whole time — a stale config, not a stale repo.
+ * Blindly trusting `identity.branch` in that case makes pull operate on the
+ * wrong branch and treat old root-of-history commits as new (see issue #57).
+ * We ask the running local Dolt server what branch is actually checked out
+ * and prefer that when it disagrees with the persisted config — then we fix
+ * the config so this reconciliation is only needed once per project.
+ */
+export async function reconcileBranch(
+  identity: ServerIdentity,
+  local: VersioningLocalService,
+): Promise<string> {
+  const actual = await local.getCurrentBranch(identity as LocalServerIdentity);
+  if (!actual || actual === identity.branch) {
+    return identity.branch;
+  }
+  printInfo(
+    `Note: the project config remembered branch "${identity.branch}", but "${actual}" is actually checked out locally — using "${actual}" and updating the saved branch.`,
+  );
+  try {
+    await createLocalProjectService().setBranch(process.cwd(), actual);
+  } catch (err) {
+    if (!(err instanceof NoProjectError)) throw err;
+  }
+  return actual;
+}
 
 export async function runPull(args: string[]): Promise<number> {
   if (args.includes('--help') || args.includes('-h')) {
@@ -22,10 +58,9 @@ export async function runPull(args: string[]): Promise<number> {
   if (!identity) {
     return 1;
   }
-  const branch = identity.branch;
   try {
     const local = await newLocalService();
-
+    const branch = await reconcileBranch(identity, local);
     if (abort) {
       await withSpinner('Aborting merge', () => local.mergeAbort(identity, branch));
       printSuccess(`Merge aborted for ${identity.repo}`);
@@ -110,9 +145,9 @@ export async function runFetch(args: string[]): Promise<number> {
   if (!identity) {
     return 1;
   }
-  const branch = identity.branch;
   try {
     const local = await newLocalService();
+    const branch = await reconcileBranch(identity, local);
     const from = await local.getRemoteHead(identity, branch);
     if (!from) {
       printInfo(`No remote-tracking ref for ${identity.repo} yet — run \`deltix pull\` first.`);

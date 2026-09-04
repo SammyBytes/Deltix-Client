@@ -417,13 +417,18 @@ export class VersioningApiAdapter {
     repoId: string,
     commits: ImportedCommit[],
     from: string | null = null,
+    branch?: string,
   ): Promise<PushCommitsResult> {
     const res = await this.request(
       `/api/v1/versioning/repos/${encodeURIComponent(repoId)}/push-commits`,
       accessToken,
       {
         method: 'POST',
-        body: from ? { commits, from } : { commits },
+        body: {
+          commits,
+          ...(from ? { from } : {}),
+          ...(branch ? { branch } : {}),
+        },
       },
     );
     if (res.status === 404) throw new RepoNotFoundError(await this.readError(res));
