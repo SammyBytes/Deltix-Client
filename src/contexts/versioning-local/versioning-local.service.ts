@@ -233,7 +233,46 @@ export class VersioningLocalService {
     }
     const binaryPath = await this.deps.binaryManager.ensureInstalled();
     await this.ensureLocalRepo(binaryPath, dataDir, id.repo);
-    return this.getRemoteRefHash(binaryPath, dataDir, branch);
+    // Prefer the persisted server-head (written by saveSyncState after every
+    // successful pull/clone). The origin/<branch> Dolt branch stores a local
+    // commit hash (created by dolt commit during applyCommits), which is
+    // different from the server's hash and causes "target commit not found"
+    // when sent back as the `from` parameter. Fall back to the Dolt branch
+    // ref for repos that haven't been patched yet (e.g. pre-0.8.3 clients).
+    return (
+      (await this.readSyncState(id, branch)) ?? this.getRemoteRefHash(binaryPath, dataDir, branch)
+    );
+  }
+
+  /**
+   * Persists the server's commit hash after a successful pull/clone. The hash
+   * is the server-side `serverHead` (from the X-Deltix-Server-Head header),
+   * which is the value the next pull must send as `from` for delta negotiation.
+   */
+  async saveSyncState(id: LocalServerIdentity, branch: string, serverHead: string): Promise<void> {
+    const dataDir = computeLocalDataDir(this.deps.homeDir, id);
+    const syncFile = join(dataDir, '.deltix-sync-state');
+    await mkdir(join(dataDir), { recursive: true });
+    await writeFile(syncFile, JSON.stringify({ serverHead, branch }), 'utf-8');
+  }
+
+  /** Reads the persisted server-head hash for `branch` (or `null` if never synced). */
+  async readSyncState(id: LocalServerIdentity, branch: string): Promise<string | null> {
+    const dataDir = computeLocalDataDir(this.deps.homeDir, id);
+    const syncFile = join(dataDir, '.deltix-sync-state');
+    if (!existsSync(syncFile)) {
+      return null;
+    }
+    try {
+      const raw = await readFile(syncFile, 'utf-8');
+      const state = JSON.parse(raw) as { serverHead?: string; branch?: string };
+      if (state.branch === branch && typeof state.serverHead === 'string') {
+        return state.serverHead;
+      }
+    } catch {
+      // Corrupted file — treat as not synced.
+    }
+    return null;
   }
 
   /**

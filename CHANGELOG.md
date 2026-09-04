@@ -9,6 +9,21 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.8.3] - 2026-09-03
+
+**In plain terms:** Even after the previous updates, `pull`/`fetch` could still stop working with a "target commit not found" error and never come back. The real reason: the tool was remembering the wrong "I'm up to this point" marker locally — it stored a hash that only exists on your own machine and, being a hash that depends on the exact timestamp, could never be found on the central server. This update makes the tool remember the server's own marker instead, so the next sync always starts from a place the server recognizes. Pulling and fetching now keep working reliably across more than one cycle.
+
+### Fixed
+
+- **`pull`/`fetch`/`clone` no longer poison the sync marker with a local-only commit hash (root fix for "target commit not found").** The tool tracked the negotiation hash (`origin/<branch>`) as a Dolt branch pointing at the *locally recreated* commit. Because Dolt commit hashes are content-addressed and fold in the commit timestamp, a locally replayed copy never has the same hash as the server's original — so on the *next* pull/fetch the client sent that local hash back as `from`, and the server rejected it with "target commit not found". Pull/fetch appeared to work only the very first time.
+- **The client now persists the server's own head hash after every successful pull/clone/fetch** (in a small `.deltix-sync-state` file next to the local repo) and uses it as the next `from` for delta negotiation, instead of the local `origin/<branch>` ref. `getRemoteHead()` prefers the persisted server head and only falls back to the old local ref for repos not yet migrated. The `origin/<branch>` Dolt ref is still maintained for push bookkeeping.
+- **Persisted after pull (fast-forward & merge paths), fetch, and clone** so the marker is kept current in every sync flow.
+
+### Tests
+
+- Unit suite passes: 131 tests, 0 failures (3 new tests cover `saveSyncState`/`readSyncState` round-trip, overwrite, and corrupted-file handling).
+- Companion Deltix-Server v0.8.7 integration test asserts a stale `from` hash yields a `200` full re-sync instead of an error.
+
 ## [0.8.2] - 2026-09-03
 
 **In plain terms:** For a long time, `pull` and `fetch` could quietly stop working with a puzzling "target commit not found" error when your local copy had drifted out of sync with the central server. That was a problem on the server side, but the tool could not cope with the fix. Now, after the server sends the full history to get things back in step, this update makes sure the tool folds that history in cleanly without accidentally duplicating commits it already had. The copy pulls into sync cleanly, no duplicates, instead of failing.
