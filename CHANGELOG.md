@@ -9,6 +9,44 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.8.10] - 2026-09-04
+
+**In plain terms:** even after the 0.8.9 self-heal fix, `pull`/`fetch` could
+still fail with `target commit not found` on repos where nothing new had
+happened since the last sync ("already up to date"). This was a leftover
+bug from *before* both prior fixes: on that specific "nothing new" path,
+the CLI accidentally tried to save the server's own commit ID as if it
+were a local one, which Dolt doesn't understand — so it errored out. Fixed:
+that redundant, wrong step is now removed; the correct bookkeeping (used by
+every other code path already) is all that's needed here too.
+
+### Fixed
+
+- **`pull`/`fetch` no longer fail with `target commit not found` on the
+  "already up to date" / "no new commits" fast path.** Root cause: both
+  `runPull()` and `runFetch()` called
+  `local.advanceRemoteRef(identity, branch, serverHead)` on that path —
+  but `advanceRemoteRef` runs `dolt branch -f origin/<branch> <hash>`,
+  which requires a *local* Dolt commit hash, while `serverHead` is the
+  server's own commit identifier (a different value space entirely, as
+  already documented in `getRemoteHead()`'s existing comment about exactly
+  this mismatch). Passing the server hash straight through reproduced the
+  original "target commit not found" failure whenever a pull/fetch found
+  no new commits to apply.
+- The fix simply removes that incorrect `advanceRemoteRef` call from both
+  fast paths — `saveSyncState(identity, branch, serverHead)` alone is
+  correct and sufficient, since `getRemoteHead()` already prefers the
+  persisted sync state over the raw `origin/<branch>` Dolt ref for the next
+  negotiation. No other code path was affected: every other call to
+  `advanceRemoteRef` already passes a real local Dolt commit hash (from
+  `applyCommits()` or `getBranchHead()`), not a server hash.
+
+### Tests
+
+- Full unit suite (136 tests) passes; typecheck shows no new errors beyond
+  the same pre-existing unrelated ones present on `main` before this
+  change.
+
 ## [0.8.9] - 2026-09-04
 
 **In plain terms:** v0.8.8 fixed `pull`/`push`/`fetch` to respect whatever

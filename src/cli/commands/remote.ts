@@ -113,9 +113,14 @@ export async function runPull(args: string[]): Promise<number> {
 
     if (commits.length === 0) {
       if (serverHead) {
-        await withSpinner('Advancing remote ref', () =>
-          local.advanceRemoteRef(identity, branch, serverHead),
-        );
+        // Do NOT call advanceRemoteRef here: `dolt branch -f origin/<branch>
+        // <hash>` requires a *local* Dolt commit hash, but `serverHead` is
+        // the server's own hash (different format/space — see the comment
+        // in getRemoteHead()). Passing it straight through reproduces
+        // "target commit not found" (issue #57). saveSyncState is enough:
+        // getRemoteHead() prefers the persisted sync state over the raw
+        // Dolt ref, so the next pull/fetch negotiates correctly without
+        // ever touching origin/<branch> here.
         await local.saveSyncState(identity, branch, serverHead);
       }
       printInfo(`Already up to date for ${identity.repo}`);
@@ -159,9 +164,11 @@ export async function runFetch(args: string[]): Promise<number> {
     );
     if (commits.length === 0) {
       if (serverHead && serverHead !== from) {
-        await withSpinner('Advancing remote ref', () =>
-          local.advanceRemoteRef(identity, branch, serverHead),
-        );
+        // See the identical comment in runPull(): advanceRemoteRef expects a
+        // *local* Dolt commit hash, but serverHead is the server's own hash
+        // — passing it through here reproduces "target commit not found".
+        // saveSyncState alone is sufficient; getRemoteHead() prefers it over
+        // the raw Dolt ref on the next negotiation.
         await local.saveSyncState(identity, branch, serverHead);
       }
       printInfo(`No new commits for ${identity.repo}`);
