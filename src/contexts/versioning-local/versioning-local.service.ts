@@ -172,7 +172,7 @@ export class VersioningLocalService {
    */
   async getUnpushedCommits(
     id: LocalServerIdentity,
-    branch = DEFAULT_BRANCH,
+    branch: string = DEFAULT_BRANCH,
   ): Promise<LocalCommitWithData[]> {
     const dataDir = computeLocalDataDir(this.deps.homeDir, id);
     if (!existsSync(dataDir)) {
@@ -215,7 +215,10 @@ export class VersioningLocalService {
   }
 
   /** Current head hash of a local branch (or `null` if it does not exist). */
-  async getBranchHead(id: LocalServerIdentity, branch = DEFAULT_BRANCH): Promise<string | null> {
+  async getBranchHead(
+    id: LocalServerIdentity,
+    branch: string = DEFAULT_BRANCH,
+  ): Promise<string | null> {
     const dataDir = computeLocalDataDir(this.deps.homeDir, id);
     if (!existsSync(dataDir)) {
       throw new CommitDataDirNotFoundError(id.repo);
@@ -226,7 +229,10 @@ export class VersioningLocalService {
   }
 
   /** Head of the remote-tracking ref `origin/<branch>` (null if never synced). */
-  async getRemoteHead(id: LocalServerIdentity, branch = DEFAULT_BRANCH): Promise<string | null> {
+  async getRemoteHead(
+    id: LocalServerIdentity,
+    branch: string = DEFAULT_BRANCH,
+  ): Promise<string | null> {
     const dataDir = computeLocalDataDir(this.deps.homeDir, id);
     if (!existsSync(dataDir)) {
       throw new CommitDataDirNotFoundError(id.repo);
@@ -1249,7 +1255,7 @@ export class VersioningLocalService {
    */
   async mergeFromRemote(
     id: LocalServerIdentity,
-    branch = DEFAULT_BRANCH,
+    branch: string = DEFAULT_BRANCH,
   ): Promise<PullMergeResult> {
     const dataDir = computeLocalDataDir(this.deps.homeDir, id);
     if (!existsSync(dataDir)) {
@@ -1289,7 +1295,7 @@ export class VersioningLocalService {
   }
 
   /** Abort an in-progress merge (e.g. after `deltix pull --abort`). */
-  async mergeAbort(id: LocalServerIdentity, branch = DEFAULT_BRANCH): Promise<void> {
+  async mergeAbort(id: LocalServerIdentity, branch: string = DEFAULT_BRANCH): Promise<void> {
     const dataDir = computeLocalDataDir(this.deps.homeDir, id);
     if (!existsSync(dataDir)) {
       throw new CommitDataDirNotFoundError(id.repo);

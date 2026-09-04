@@ -1,5 +1,6 @@
 import { createLocalProjectService, NoProjectError } from '../../contexts/local-project';
 import type { MergeConflictError } from '../../contexts/versioning/errors';
+import { DEFAULT_BRANCH } from '../../shared/constants';
 import { printError, printTable } from '../output';
 
 export function branchUsage(): number {
@@ -45,16 +46,27 @@ export async function resolveRepoAndName(
   return { repo, name: nameArg };
 }
 
+export interface ServerIdentity {
+  repo: string;
+  projectRoot?: string;
+  /** Last branch used in this checkout (`.deltix/config.toml`), so `pull`/
+   * `push`/`fetch` operate on the branch the user is actually working on
+   * instead of always assuming `main`. Falls back to `main` when no project
+   * is bound (e.g. `--repo` passed explicitly with no cwd project). */
+  branch: string;
+}
+
 export async function resolveServerIdentity(
   repoArg: string | undefined,
-): Promise<{ repo: string; projectRoot?: string } | null> {
-  const tryResolveProjectRoot = async (): Promise<{
-    repo: string;
-    projectRoot?: string;
-  } | null> => {
+): Promise<ServerIdentity | null> {
+  const tryResolveProjectRoot = async (): Promise<ServerIdentity | null> => {
     try {
       const project = await createLocalProjectService().resolve(process.cwd());
-      return { repo: project.config.repo, projectRoot: project.root };
+      return {
+        repo: project.config.repo,
+        projectRoot: project.root,
+        branch: project.config.branch,
+      };
     } catch (err) {
       if (err instanceof NoProjectError) return null;
       throw err;
@@ -64,9 +76,9 @@ export async function resolveServerIdentity(
   if (repoArg) {
     const fromProject = await tryResolveProjectRoot();
     if (fromProject && fromProject.repo === repoArg) {
-      return { repo: repoArg, projectRoot: fromProject.projectRoot };
+      return fromProject;
     }
-    return { repo: repoArg };
+    return { repo: repoArg, branch: DEFAULT_BRANCH };
   }
   const fromProject = await tryResolveProjectRoot();
   if (!fromProject) return null;

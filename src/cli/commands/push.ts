@@ -15,7 +15,7 @@ export async function runPush(args: string[]): Promise<number> {
   try {
     const localService = await newLocalService();
 
-    const branch = 'main';
+    const branch = identity.branch;
     const commits = await withSpinner('Reading unpushed commits', () =>
       localService.getUnpushedCommits(identity, branch),
     );

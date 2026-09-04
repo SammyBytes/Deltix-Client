@@ -22,7 +22,7 @@ export async function runPull(args: string[]): Promise<number> {
   if (!identity) {
     return 1;
   }
-  const branch = DEFAULT_BRANCH;
+  const branch = identity.branch;
   try {
     const local = await newLocalService();
 
@@ -110,7 +110,7 @@ export async function runFetch(args: string[]): Promise<number> {
   if (!identity) {
     return 1;
   }
-  const branch = DEFAULT_BRANCH;
+  const branch = identity.branch;
   try {
     const local = await newLocalService();
     const from = await local.getRemoteHead(identity, branch);

@@ -9,6 +9,56 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.8.8] - 2026-09-04
+
+**In plain terms:** if you ever switched your project to a branch other
+than the default one (for example `sync-develop-base`), `deltix pull`,
+`push`, and `fetch` were silently ignoring that and working against `main`
+instead — even though `deltix branch checkout` looked like it had switched
+you correctly. In practice this meant your real branch could look like it
+"disappeared," because nothing was actually keeping it in sync; the CLI was
+quietly operating on a different branch the whole time. Fixed: the CLI now
+remembers and uses the branch you actually checked out for every pull,
+push, and fetch.
+
+### Fixed
+
+- **`deltix branch checkout <repo> <name>` now persists the checked-out
+  branch** to `.deltix/config.toml` (via the previously-unused
+  `LocalProjectService.setBranch()`). Before this fix the checkout only
+  changed the branch on the Dolt server/working copy — the CLI's project
+  config still remembered whatever branch was bound at `init` time (almost
+  always `main`).
+- **`resolveServerIdentity()` now returns the project's actual bound
+  branch** (`ServerIdentity.branch`), sourced from `.deltix/config.toml`,
+  instead of always resolving repo/projectRoot with no branch awareness.
+  Falls back to the default branch only when no project is bound in the
+  current directory (e.g. a bare `--repo` flag with no `.deltix` project).
+- **`deltix pull`, `deltix push`, and `deltix fetch` now operate on
+  `identity.branch`** instead of a hardcoded `main`/`DEFAULT_BRANCH`
+  literal. This was the root cause of a reported incident where a user's
+  real working branch (`sync-develop-base`) appeared to vanish after an
+  interrupted `pull` — the CLI had never actually been operating on that
+  branch; it was always pulling/pushing/fetching against `main`, so the
+  orphaned temporary branch and the migration-history row mismatch the user
+  observed are consistent with this branch mismatch, not a Dolt-level data
+  loss event. `deltix clone` is intentionally unchanged (a fresh clone has
+  no bound project yet, so defaulting to `main` remains correct).
+
+### Tests
+
+- New unit test (`tests/unit/cli/resolve-server-identity.test.ts`) verifies
+  `resolveServerIdentity()` returns the project's persisted branch after
+  `setBranch()`, and falls back to the default branch when no project is
+  bound. Confirmed the test fails (returns `undefined` for `.branch`)
+  against the pre-fix code and passes after the fix (TDD).
+- Full existing unit suite (133 tests) and the real-Dolt-binary integration
+  suite (`apply-commits-idempotency`, `import-auto-increment`, etc.) re-run
+  clean with no regressions; `push-pull-roundtrip.integration.test.ts`'s
+  pre-existing unrelated failure (a Bun shell-quoting issue with
+  `--author=<email>`) was confirmed present before this change too and is
+  out of scope here.
+
 ## [0.8.7] - 2026-09-04
 
 **In plain terms:** `deltix push` used to accept a push even when someone

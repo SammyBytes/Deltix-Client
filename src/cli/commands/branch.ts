@@ -1,3 +1,4 @@
+import { createLocalProjectService, NoProjectError } from '../../contexts/local-project';
 import { NoActiveSessionError, ServerUnreachableError } from '../../contexts/session';
 import {
   createVersioningService,
@@ -40,6 +41,18 @@ export async function runBranch(args: string[]): Promise<number> {
       }
     }
     return null;
+  };
+
+  // Persists the checked-out branch to `.deltix/config.toml` (best-effort —
+  // a repoArg pointing at a repo with no cwd project binding just skips
+  // this) so `pull`/`push`/`fetch` default to the branch the user actually
+  // checked out instead of always assuming `main`.
+  const persistCheckedOutBranch = async (name: string): Promise<void> => {
+    try {
+      await createLocalProjectService().setBranch(process.cwd(), name);
+    } catch (err) {
+      if (!(err instanceof NoProjectError)) throw err;
+    }
   };
 
   try {
@@ -105,6 +118,7 @@ export async function runBranch(args: string[]): Promise<number> {
         if (!params) return 1;
         try {
           const branch = await service.checkoutBranch(params.repo, params.name);
+          await persistCheckedOutBranch(params.name);
           printSuccess(`Checked out ${params.repo}`, {
             current: branch.currentBranch,
           });
@@ -115,6 +129,7 @@ export async function runBranch(args: string[]): Promise<number> {
             if (!identity) return 1;
             const local = await newLocalService();
             await local.checkout(identity, params.name);
+            await persistCheckedOutBranch(params.name);
             printSuccess(`Checked out locally ${params.repo}`, { branch: params.name });
             return 0;
           });
