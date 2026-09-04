@@ -9,6 +9,35 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.8.7] - 2026-09-04
+
+**In plain terms:** `deltix push` used to accept a push even when someone
+else had already pushed newer work to the same repository in the meantime —
+and that could quietly overwrite or orphan their commits with zero warning,
+exactly what git protects against. Now the push behaves like git: it sends the
+server the point it last pulled from, and if the remote has advanced beyond
+that, the server refuses the push and `deltix push` clearly tells you to
+`deltix pull` first. No more silent data loss on a shared repo.
+
+### Changed
+
+- **`deltix push` now sends a push base (`from`) to the server** — the remote
+  head it last pulled from (the persisted server head from `.deltix-sync-state`,
+  falling back to the local `origin/main` ref). The server compares that against
+  its own `main` head and rejects a non-fast-forward push with a `409`.
+- **New `NonFastForwardError`** surfaced as a clear message — "the remote has
+  advanced. Run `deltix pull` first" — instead of the push silently applying.
+
+### Tests
+
+- Unit suite passes: 131 tests, 0 failures (push service now forwards `from`).
+- The shared round-trip integration test could not be run in this environment
+  (the local Bun shell mis-parses the `--author=deltix <deltix@deltix.local>`
+  redirect in the test harness — unrelated to this change). The new push-guard
+  logic itself is covered by the server's own unit suite: matching `from`
+  accepted, stale `from` rejected with `NonFastForwardError`, and absent `from`
+  accepted for backwards compatibility.
+
 ## [0.8.6] - 2026-09-04
 
 **In plain terms:** Last round we stopped the pull from overwriting your unsaved local work. But there was still a real problem: if your copy was fully saved and the pull hit a snag halfway through, it could still leave your data damaged — some tables changed, others not, with no way back. Now, when a pull fails partway through with a clean working copy, it fully undoes the partial changes: your tables are put back exactly as they were before you pulled. This round also makes pulling more robust for tables that contain empty dates, which previously made the pull stop with a confusing error.

@@ -153,7 +153,7 @@ describe('versioning/versioning.service (unit, fake adapter)', () => {
 
     expect(result.commitHash).toBe('abc123');
     expect(sessionService.mintAccessToken).toHaveBeenCalledTimes(1);
-    expect(adapter.pushCommits).toHaveBeenCalledWith('access-token', 'demo', commits);
+    expect(adapter.pushCommits).toHaveBeenCalledWith('access-token', 'demo', commits, null);
   });
 
   it('propagates session/authentication failures', async () => {

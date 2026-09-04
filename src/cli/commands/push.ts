@@ -25,9 +25,11 @@ export async function runPush(args: string[]): Promise<number> {
       return 0;
     }
 
+    const from = await localService.getRemoteHead(identity, branch);
+
     const result = await withSpinner(
       `Pushing ${commits.length} commit(s) to ${identity.repo}`,
-      () => createVersioningService().pushCommits(identity.repo, commits),
+      () => createVersioningService().pushCommits(identity.repo, commits, from),
     );
 
     await withSpinner('Advancing remote ref', async () => {

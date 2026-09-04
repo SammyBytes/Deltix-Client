@@ -2,6 +2,7 @@ import { NoProjectError } from '../../contexts/local-project';
 import { NoActiveSessionError } from '../../contexts/session';
 import {
   InsufficientRoleError,
+  NonFastForwardError,
   RepoNotFoundError,
   ValidationError,
   VersioningAuthenticationError,
@@ -22,6 +23,7 @@ export function handleSyncError(err: unknown, action: string): number {
     err instanceof UncommittedChangesError ||
     err instanceof PushError ||
     err instanceof InsufficientRoleError ||
+    err instanceof NonFastForwardError ||
     err instanceof RepoNotFoundError ||
     err instanceof ValidationError
   ) {

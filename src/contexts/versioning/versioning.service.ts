@@ -148,11 +148,16 @@ export class VersioningService {
     );
   }
 
-  async pushCommits(repoId: string, commits: ImportedCommit[]): Promise<PushCommitsResult> {
+  async pushCommits(
+    repoId: string,
+    commits: ImportedCommit[],
+    from: string | null = null,
+  ): Promise<PushCommitsResult> {
     return this.versioningApi.pushCommits(
       await this.sessionService.mintAccessToken(),
       repoId,
       commits,
+      from,
     );
   }
 

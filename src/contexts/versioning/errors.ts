@@ -105,3 +105,10 @@ export class MergeConflictError extends Error {
     this.name = 'MergeConflictError';
   }
 }
+
+export class NonFastForwardError extends Error {
+  constructor(message = 'Push rejected: the remote has advanced. Run `deltix pull` first.') {
+    super(message);
+    this.name = 'NonFastForwardError';
+  }
+}

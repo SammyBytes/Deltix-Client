@@ -6,6 +6,7 @@ export {
   MergeConflictError,
   type MergeConflictRow,
   type MergeConflictTable,
+  NonFastForwardError,
   ProtectedBranchError,
   RepoAlreadyExistsError,
   RepoNotFoundError,

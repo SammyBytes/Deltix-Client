@@ -5,6 +5,7 @@ import {
   InsufficientRoleError,
   MergeConflictError,
   type MergeConflictTable,
+  NonFastForwardError,
   ProtectedBranchError,
   RepoAlreadyExistsError,
   RepoNotFoundError,
@@ -415,16 +416,18 @@ export class VersioningApiAdapter {
     accessToken: string,
     repoId: string,
     commits: ImportedCommit[],
+    from: string | null = null,
   ): Promise<PushCommitsResult> {
     const res = await this.request(
       `/api/v1/versioning/repos/${encodeURIComponent(repoId)}/push-commits`,
       accessToken,
       {
         method: 'POST',
-        body: { commits },
+        body: from ? { commits, from } : { commits },
       },
     );
     if (res.status === 404) throw new RepoNotFoundError(await this.readError(res));
+    if (res.status === 409) throw new NonFastForwardError(await this.readError(res));
     await this.throwIfCommonErrors(res);
     if (res.status !== 201) {
       throw new VersioningRequestError(await this.readError(res), res.status);
