@@ -122,4 +122,64 @@ describe('versioning-local/versioning-local.service (unit)', () => {
       await rm(homeDir, { recursive: true, force: true });
     });
   });
+
+  describe('renameSyncStateBranch', () => {
+    it('re-keys existing state from oldBranch to newBranch, preserving serverHead', async () => {
+      const homeDir = await mkdtemp(join(tmpdir(), 'deltix-test-'));
+      const service = new VersioningLocalService(makeDeps(homeDir));
+      const id = { repo: 'testrepo', projectRoot: '/work/testrepo' };
+
+      await service.saveSyncState(id, 'main', 'abc123');
+      await service.renameSyncStateBranch(id, 'main', 'sync-develop-base');
+
+      // Regression guard for issue #57 "bug #5": after reconcileBranch()
+      // corrects a stale branch name, the next getRemoteHead() call must
+      // still find the previously-recorded serverHead under the corrected
+      // branch — otherwise the client looks never-synced and the server
+      // re-applies the entire commit history with brand-new hashes.
+      expect(await service.readSyncState(id, 'sync-develop-base')).toBe('abc123');
+      expect(await service.readSyncState(id, 'main')).toBeNull();
+
+      await rm(homeDir, { recursive: true, force: true });
+    });
+
+    it('is a no-op when there is no existing state file', async () => {
+      const homeDir = await mkdtemp(join(tmpdir(), 'deltix-test-'));
+      const service = new VersioningLocalService(makeDeps(homeDir));
+      const id = { repo: 'testrepo', projectRoot: '/work/testrepo' };
+
+      await expect(
+        service.renameSyncStateBranch(id, 'main', 'sync-develop-base'),
+      ).resolves.toBeUndefined();
+      expect(await service.readSyncState(id, 'sync-develop-base')).toBeNull();
+
+      await rm(homeDir, { recursive: true, force: true });
+    });
+
+    it('is a no-op when the state is keyed under a different branch than oldBranch', async () => {
+      const homeDir = await mkdtemp(join(tmpdir(), 'deltix-test-'));
+      const service = new VersioningLocalService(makeDeps(homeDir));
+      const id = { repo: 'testrepo', projectRoot: '/work/testrepo' };
+
+      await service.saveSyncState(id, 'other-branch', 'xyz789');
+      await service.renameSyncStateBranch(id, 'main', 'sync-develop-base');
+
+      expect(await service.readSyncState(id, 'other-branch')).toBe('xyz789');
+      expect(await service.readSyncState(id, 'sync-develop-base')).toBeNull();
+
+      await rm(homeDir, { recursive: true, force: true });
+    });
+
+    it('is a no-op when oldBranch and newBranch are the same', async () => {
+      const homeDir = await mkdtemp(join(tmpdir(), 'deltix-test-'));
+      const service = new VersioningLocalService(makeDeps(homeDir));
+      const id = { repo: 'testrepo', projectRoot: '/work/testrepo' };
+
+      await service.saveSyncState(id, 'main', 'abc123');
+      await service.renameSyncStateBranch(id, 'main', 'main');
+      expect(await service.readSyncState(id, 'main')).toBe('abc123');
+
+      await rm(homeDir, { recursive: true, force: true });
+    });
+  });
 });

@@ -9,6 +9,54 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.8.13] - 2026-09-04
+
+**In plain terms:** when the app noticed your project's saved branch name was
+wrong and fixed it (the improvement from the last release), it forgot to
+also update a second, related record that keeps track of "what you already
+have downloaded." That mismatch made the app think you'd never synced at
+all, so on your *next* pull it downloaded and replayed your **entire commit
+history** again under brand-new IDs — even though you already had all of it.
+Usually the data still ended up correct by luck, but it's wasteful and, in
+rarer cases, risky. This is fixed: both records are now corrected together,
+so a corrected branch name no longer resets your sync history.
+
+### Fixed
+- Root cause of the "entire history replayed with new commit hashes"
+  behavior reported repeatedly on issue #57 (referred to there as "bug #5"),
+  for the specific case where it followed a branch self-heal: the persisted
+  sync state (`.deltix-sync-state`, which records the last known server
+  commit so `pull`/`fetch` can ask the server "what's new since this point"
+  instead of "give me everything") is stored keyed by branch name. When
+  `reconcileBranch()` (added in 0.8.9) corrected a stale branch name in
+  `.deltix/config.toml`, it updated the config but never updated this
+  sync-state file to match. The very next `pull`/`fetch` then looked up the
+  sync state under the *new* (correct) branch name, found nothing, and
+  treated the client as never having synced — causing the server to send,
+  and the client to reapply, the complete commit history under new hashes.
+  Added `VersioningLocalService.renameSyncStateBranch()` and wired it into
+  `reconcileBranch()` so the sync state now migrates alongside the branch
+  correction, keeping the two records in lockstep.
+
+### Tests
+- New unit tests for `renameSyncStateBranch()`: re-keys existing state from
+  the old branch to the new one while preserving the recorded server head;
+  is a no-op when there is no state file yet; is a no-op when the state is
+  keyed under a branch other than the one being renamed; is a no-op when
+  old and new branch names are identical.
+- New unit test on `reconcileBranch()` asserting it calls
+  `renameSyncStateBranch()` with the exact old/new branch pair whenever it
+  corrects a mismatched branch, as a direct regression guard for this bug.
+- Full unit suite: 141/141 passing (up from 136, +5 new tests this release).
+- Full integration suite run: only the two previously-documented,
+  environment-dependent pre-existing failures observed (a Bun shell-quoting
+  bug in `push-pull-roundtrip.integration.test.ts` and a timing/cleanup race
+  in `apply-commits-idempotency.integration.test.ts`), both confirmed via
+  `git stash` baseline comparison to be unrelated to this change.
+- Typecheck: no new errors versus the pre-change baseline (same
+  pre-existing `tsc` errors on both sides, confirmed via `git stash`
+  comparison).
+
 ## [0.8.12] - 2026-09-04
 
 **In plain terms:** the "self-heal your branch settings" fix from 0.8.9 had

@@ -30,6 +30,7 @@ describe('cli/commands/remote reconcileBranch (unit)', () => {
 
       const fakeLocal = {
         getCurrentBranch: async () => 'sync-develop-base',
+        renameSyncStateBranch: async () => {},
       } as unknown as VersioningLocalService;
 
       const branch = await reconcileBranch({ repo: 'hmc-sync', branch: 'main' }, fakeLocal);
@@ -39,6 +40,35 @@ describe('cli/commands/remote reconcileBranch (unit)', () => {
       // Config should now be fixed for next time.
       const project = await service.resolve(root);
       expect(project.config.branch).toBe('sync-develop-base');
+    } finally {
+      process.chdir(originalCwd);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('migrates the persisted sync state to the corrected branch name so the next pull negotiates correctly', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'deltix-reconcile-'));
+    const originalCwd = process.cwd();
+    try {
+      const service = createLocalProjectService();
+      await service.init(root, 'hmc-sync');
+      process.chdir(root);
+
+      const calls: Array<{ oldBranch: string; newBranch: string }> = [];
+      const fakeLocal = {
+        getCurrentBranch: async () => 'sync-develop-base',
+        renameSyncStateBranch: async (_id: unknown, oldBranch: string, newBranch: string) => {
+          calls.push({ oldBranch, newBranch });
+        },
+      } as unknown as VersioningLocalService;
+
+      await reconcileBranch({ repo: 'hmc-sync', branch: 'main' }, fakeLocal);
+
+      // Regression guard for issue #57 "bug #5": renaming the branch in
+      // config without also re-keying the sync state file made the very
+      // next pull believe the client had never synced, causing the entire
+      // commit history to be re-applied with brand-new hashes.
+      expect(calls).toEqual([{ oldBranch: 'main', newBranch: 'sync-develop-base' }]);
     } finally {
       process.chdir(originalCwd);
       await rm(root, { recursive: true, force: true });

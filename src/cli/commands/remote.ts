@@ -42,6 +42,13 @@ export async function reconcileBranch(
   } catch (err) {
     if (!(err instanceof NoProjectError)) throw err;
   }
+  // The persisted sync state (.deltix-sync-state) is keyed by branch name.
+  // Without migrating it here, the very next getRemoteHead() call would look
+  // it up under the corrected branch name, find nothing, and fall back to a
+  // missing/stale origin/<branch> ref — making the server treat this client
+  // as never-synced and re-apply the entire commit history with new hashes
+  // (issue #57, "bug #5"). Re-key it so the existing sync state carries over.
+  await local.renameSyncStateBranch(identity as LocalServerIdentity, identity.branch, actual);
   return actual;
 }
 

@@ -262,6 +262,47 @@ export class VersioningLocalService {
     await writeFile(syncFile, JSON.stringify({ serverHead, branch }), 'utf-8');
   }
 
+  /**
+   * Re-keys the persisted sync state from `oldBranch` to `newBranch`,
+   * preserving the recorded `serverHead`. Used when `reconcileBranch()`
+   * corrects a stale branch name in `.deltix/config.toml` (issue #57): the
+   * sync state file is keyed by branch name, so without this migration the
+   * corrected branch name would find no matching state on the very next
+   * `readSyncState()` call, `getRemoteHead()` would fall back to the
+   * (missing/stale) `origin/<branch>` Dolt ref, and the server would treat
+   * the client as never-synced — re-sending and re-applying the entire
+   * commit history with brand-new hashes instead of recognizing it as
+   * already up to date. No-op if there is no state file, or the state is
+   * not currently keyed under `oldBranch`.
+   */
+  async renameSyncStateBranch(
+    id: LocalServerIdentity,
+    oldBranch: string,
+    newBranch: string,
+  ): Promise<void> {
+    if (oldBranch === newBranch) {
+      return;
+    }
+    const dataDir = computeLocalDataDir(this.deps.homeDir, id);
+    const syncFile = join(dataDir, '.deltix-sync-state');
+    if (!existsSync(syncFile)) {
+      return;
+    }
+    try {
+      const raw = await readFile(syncFile, 'utf-8');
+      const state = JSON.parse(raw) as { serverHead?: string; branch?: string };
+      if (state.branch === oldBranch && typeof state.serverHead === 'string') {
+        await writeFile(
+          syncFile,
+          JSON.stringify({ serverHead: state.serverHead, branch: newBranch }),
+          'utf-8',
+        );
+      }
+    } catch {
+      // Corrupted file — leave as-is, matching readSyncState's tolerance.
+    }
+  }
+
   /** Reads the persisted server-head hash for `branch` (or `null` if never synced). */
   async readSyncState(id: LocalServerIdentity, branch: string): Promise<string | null> {
     const dataDir = computeLocalDataDir(this.deps.homeDir, id);
