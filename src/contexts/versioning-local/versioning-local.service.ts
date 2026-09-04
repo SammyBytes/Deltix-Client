@@ -22,6 +22,7 @@ import {
   LocalRepoInitError,
   PushEmptyError,
   PushError,
+  UncommittedChangesError,
 } from './versioning-local.errors';
 
 export interface LocalCommitResult {
@@ -736,6 +737,27 @@ export class VersioningLocalService {
     // corrupted working copy behind (previously a per-table TRUNCATE + reload
     // on the real branch could destroy uncommitted rows before discovering a
     // later commit was un-appliable).
+    // Idempotent apply: skip commits we've already recreated locally for this
+    // branch. This matters when the server degrades to a full-history re-sync
+    // (its `from` negotiation hash was no longer reachable) and resends commits
+    // we already applied — without this guard we'd recreate them as divergent
+    // duplicates. We can't detect that by comparing against *local* Dolt commit
+    // hashes (content-addressed, folds in the timestamp) so we persist the set
+    // of server-assigned hashes already applied instead.
+    const appliedPath = this.appliedCommitsPath(dataDir, branch);
+    const applied = await this.readAppliedHashes(appliedPath);
+    const pending = commits.filter((c) => !c.hash || !applied.has(c.hash));
+
+    // Protect the working copy: the apply below starts from the branch head,
+    // so it must not clobber uncommitted rows the user has in the very tables
+    // it is about to recreate. If any of those tables has staged or unstaged
+    // changes, fail before touching anything (git pull does the same rather
+    // than silently discarding local work).
+    const touched = [...new Set(pending.flatMap((c) => c.tables.map((t) => t.name)))];
+    if (touched.length > 0) {
+      await this.assertNoUncommittedChanges(binaryPath, dataDir, touched);
+    }
+
     const baseHead = await this.readBranchHash(binaryPath, dataDir, branch);
     const tempBranch = `_deltix_pull_${Math.random().toString(36).slice(2)}`;
 
@@ -772,17 +794,6 @@ export class VersioningLocalService {
         timeoutMs: TIMEOUT.DOLT_BRANCH,
       }).catch(() => {});
     };
-
-    // Idempotent apply: skip commits we've already recreated locally for this
-    // branch. This matters when the server degrades to a full-history re-sync
-    // (its `from` negotiation hash was no longer reachable) and resends commits
-    // we already applied — without this guard we'd recreate them as divergent
-    // duplicates. We can't detect that by comparing against *local* Dolt commit
-    // hashes (content-addressed, folds in the timestamp) so we persist the set
-    // of server-assigned hashes already applied instead.
-    const appliedPath = this.appliedCommitsPath(dataDir, branch);
-    const applied = await this.readAppliedHashes(appliedPath);
-    const pending = commits.filter((c) => !c.hash || !applied.has(c.hash));
 
     try {
       for (const commit of pending) {
@@ -996,6 +1007,30 @@ export class VersioningLocalService {
     }
   }
 
+  private async assertNoUncommittedChanges(
+    binaryPath: string,
+    dataDir: string,
+    tables?: string[],
+  ): Promise<void> {
+    const rows = await this.queryRows(
+      binaryPath,
+      dataDir,
+      'SELECT table_name, staged, status FROM dolt_status',
+    ).catch(() => [] as Record<string, string>[]);
+    if (rows.length === 0) {
+      return;
+    }
+    const dirty = new Set(
+      (rows as Record<string, string>[]).map((r) => String(r.table_name ?? r.table ?? '')),
+    );
+    const affected = tables ? dirty.intersection(new Set(tables)) : dirty;
+    if (affected.size === 0) {
+      return;
+    }
+    const list = [...affected].sort().join(', ');
+    throw new UncommittedChangesError(list);
+  }
+
   private async importTable(
     binaryPath: string,
     dataDir: string,
@@ -1188,6 +1223,13 @@ export class VersioningLocalService {
     const binaryPath = await this.deps.binaryManager.ensureInstalled();
     await this.ensureLocalRepo(binaryPath, dataDir, id.repo);
     await this.checkoutBranch(binaryPath, dataDir, branch);
+
+    // Protect the working copy: `dolt merge` applies onto the live branch and
+    // can fast-forward over / discard uncommitted rows. If the working tree is
+    // not clean, abort before touching anything instead of silently losing
+    // local work (same semantics as `git pull` refusing to overwrite local
+    // changes).
+    await this.assertNoUncommittedChanges(binaryPath, dataDir);
 
     const merge = await runDoltCommand(
       binaryPath,

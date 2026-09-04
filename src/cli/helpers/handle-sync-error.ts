@@ -10,6 +10,7 @@ import {
   CommitDataDirNotFoundError,
   LocalRepoInitError,
   PushError,
+  UncommittedChangesError,
 } from '../../contexts/versioning-local';
 import { printError } from '../output';
 
@@ -18,6 +19,7 @@ export function handleSyncError(err: unknown, action: string): number {
     err instanceof NoProjectError ||
     err instanceof CommitDataDirNotFoundError ||
     err instanceof LocalRepoInitError ||
+    err instanceof UncommittedChangesError ||
     err instanceof PushError ||
     err instanceof InsufficientRoleError ||
     err instanceof RepoNotFoundError ||

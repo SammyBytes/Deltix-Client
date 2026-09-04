@@ -5,6 +5,7 @@ export {
   LocalRepoInitError,
   PushEmptyError,
   PushError,
+  UncommittedChangesError,
 } from './versioning-local.errors';
 export type {
   LocalBranchList,

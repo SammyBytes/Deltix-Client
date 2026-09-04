@@ -50,3 +50,12 @@ export class PushEmptyError extends Error {
     this.name = 'PushEmptyError';
   }
 }
+
+export class UncommittedChangesError extends Error {
+  constructor(tables: string) {
+    super(
+      `Pull aborted: you have uncommitted changes in ${tables}. Commit or discard them first (e.g. \`deltix commit\`) so the pull can't overwrite your local work.`,
+    );
+    this.name = 'UncommittedChangesError';
+  }
+}

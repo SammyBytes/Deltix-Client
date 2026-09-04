@@ -160,4 +160,56 @@ describe.if(doltAvailable)('applyCommits() idempotency (real dolt binary)', () =
     const branches = await $`${DOLT_BIN} --data-dir ${dataDir} branch -a`.quiet().nothrow();
     expect(branches.stdout.toString()).not.toContain('_deltix_pull_');
   });
+
+  it('refuses to apply when the target table has uncommitted local changes (no data loss)', async () => {
+    const service = localService(homeDir);
+    const countBefore = await commitCount(dataDir);
+
+    // Seed a fresh table with one committed row, then add an uncommitted row in
+    // the same table the incoming commit will recreate.
+    await service.applyCommits(identity, BRANCH, [
+      {
+        hash: 'fakehash-widgets-seed',
+        message: 'seed widgets',
+        author: 'deltix',
+        tables: [
+          {
+            name: 'widgets',
+            schema: 'CREATE TABLE `widgets` (`id` int NOT NULL, PRIMARY KEY (`id`));',
+            data: 'id\n7\n',
+          },
+        ],
+      },
+    ]);
+    const seeded =
+      await $`${DOLT_BIN} --data-dir ${dataDir} sql -q "INSERT INTO widgets VALUES (99);"`
+        .quiet()
+        .nothrow();
+    expect(seeded.exitCode).toBe(0);
+
+    const commits: LocalCommitWithData[] = [
+      {
+        hash: 'fakehash-widgets-recreate',
+        message: 'recreate widgets',
+        author: 'deltix',
+        tables: [
+          {
+            name: 'widgets',
+            schema: 'CREATE TABLE `widgets` (`id` int NOT NULL, PRIMARY KEY (`id`));',
+            data: 'id\n8\n',
+          },
+        ],
+      },
+    ];
+
+    // Will touch `widgets`, which has an uncommitted row -> abort before touching.
+    await expect(service.applyCommits(identity, BRANCH, commits)).rejects.toThrow();
+
+    // Uncommitted row must survive untouched, and no commit should have happened.
+    const rows = await $`${DOLT_BIN} --data-dir ${dataDir} sql -q "SELECT id FROM widgets" -r csv`
+      .quiet()
+      .nothrow();
+    expect(rows.stdout.toString().trim().split('\n').slice(1)).toEqual(['7', '99']);
+    expect(await commitCount(dataDir)).toBe(countBefore + 1);
+  });
 });

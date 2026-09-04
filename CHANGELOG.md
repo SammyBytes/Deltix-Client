@@ -9,6 +9,19 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.8.5] - 2026-09-04
+
+**In plain terms:** The previous update made pulling apply changes as one unit, so a failed pull no longer left a half-updated copy. But if your local copy had its own recently-made changes that weren't saved yet, the pull could still overwrite them. Now, before a `pull` touches your tables, it checks whether you have unsaved local changes in those exact tables — and if you do, it tells you to save them first instead of silently wiping them. Your local work is never overwritten by a pull anymore.
+
+### Fixed
+
+- **`pull` refuses to overwrite uncommitted local changes instead of destroying them.** Both `pull` paths (fast-forward and diverged/merge) now check the working tree for staged or unstaged changes in the tables they are about to recreate or merge before touching anything. If such changes exist, the pull aborts with a clear `UncommittedChangesError` ("Pull aborted: you have uncommitted changes in ... Commit or discard them first"), leaving the working copy completely untouched — the same safety semantics as `git pull` refusing to overwrite local work. Previously a pull over a working tree with unsaved rows in a table being synced could wipe those rows (the `accounts`/migration-history data loss reproduced in #57).
+
+### Tests
+
+- Unit suite passes: 131 tests, 0 failures.
+- New real-Dolt integration test: a pull whose target table has an uncommitted row aborts before touching anything — the uncommitted row survives, the branch head is unchanged, and no leftover throwaway branch is created.
+
 ## [0.8.4] - 2026-09-04
 
 **In plain terms:** Two reliability fixes. First, when you imported a database into a shared repo, some tables could start assigning duplicate IDs after the sync — the tool now preserves each table's original "next ID" pointer, so primary keys keep working just like they did on your source database. Second, if a `pull` failed partway through (for example because one table couldn't be imported), it used to leave your local copy half-updated — some tables edited, others not, with no way back. Pulling now applies changes as one unit: if anything goes wrong, your local copy is left exactly as it was before you pulled, instead of a damaged in-between state.
