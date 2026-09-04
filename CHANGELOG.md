@@ -9,6 +9,20 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.8.4] - 2026-09-04
+
+**In plain terms:** Two reliability fixes. First, when you imported a database into a shared repo, some tables could start assigning duplicate IDs after the sync — the tool now preserves each table's original "next ID" pointer, so primary keys keep working just like they did on your source database. Second, if a `pull` failed partway through (for example because one table couldn't be imported), it used to leave your local copy half-updated — some tables edited, others not, with no way back. Pulling now applies changes as one unit: if anything goes wrong, your local copy is left exactly as it was before you pulled, instead of a damaged in-between state.
+
+### Fixed
+
+- **`deltix import` now preserves each table's `AUTO_INCREMENT` counter.** The import recreates the source schema from `SHOW CREATE TABLE` (which carries e.g. `AUTO_INCREMENT=6`), but `dolt table import -r` rewrites the table and silently reverts the counter, so the next plain `INSERT` that omits the primary key started from `1` again and collided with already-imported rows. After loading, the client re-asserts the source's declared `AUTO_INCREMENT=N` with an `ALTER TABLE ... AUTO_INCREMENT = N`, matching the origin's next-PK value.
+- **`applyCommits` (used by `pull`'s fast-forward path) is now atomic.** Previously the client recreated each commit's tables directly on the real branch — a per-table `TRUNCATE` + reload — so if a later commit (or table) in the batch failed to apply, uncommitted rows in the working copy were already destroyed and couldn't be recovered. Pulling now applies every commit to a throwaway branch and advances the real branch in a single step only if the whole batch succeeded; on any failure the throwaway branch is dropped and the working tree is restored, leaving the repo exactly as it was before the pull.
+
+### Tests
+
+- Unit suite passes: 131 tests, 0 failures.
+- New real-Dolt integration tests: importing a table with `AUTO_INCREMENT=6` yields next-ID `6` on an omit-PK insert; a batch where a later commit fails leaves the branch at its original head with no leftover throwaway branch.
+
 ## [0.8.3] - 2026-09-03
 
 **In plain terms:** Even after the previous updates, `pull`/`fetch` could still stop working with a "target commit not found" error and never come back. The real reason: the tool was remembering the wrong "I'm up to this point" marker locally — it stored a hash that only exists on your own machine and, being a hash that depends on the exact timestamp, could never be found on the central server. This update makes the tool remember the server's own marker instead, so the next sync always starts from a place the server recognizes. Pulling and fetching now keep working reliably across more than one cycle.

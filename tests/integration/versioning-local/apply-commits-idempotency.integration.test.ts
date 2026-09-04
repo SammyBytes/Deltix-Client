@@ -118,4 +118,46 @@ describe.if(doltAvailable)('applyCommits() idempotency (real dolt binary)', () =
 
     expect(countAfter).toBe(countBefore + 1);
   });
+
+  it('leaves the branch untouched when a later commit in a batch fails to apply', async () => {
+    const service = localService(homeDir);
+    const countBefore = await commitCount(dataDir);
+
+    const commits: LocalCommitWithData[] = [
+      {
+        hash: 'fakehash-ok',
+        message: 'add customers',
+        author: 'deltix',
+        tables: [
+          {
+            name: 'customers',
+            schema: 'CREATE TABLE `customers` (`id` int NOT NULL, PRIMARY KEY (`id`));',
+            data: 'id\n1\n',
+          },
+        ],
+      },
+      {
+        hash: 'fakehash-bad',
+        message: 'add evil',
+        author: 'deltix',
+        tables: [
+          {
+            name: 'evil; DROP TABLE customers; --',
+            schema: 'CREATE TABLE `x` (`id` int);',
+            data: 'id\n1\n',
+          },
+        ],
+      },
+    ];
+
+    // First table is valid, second has an unsafe name that importTable rejects.
+    await expect(service.applyCommits(identity, BRANCH, commits)).rejects.toThrow();
+
+    const countAfter = await commitCount(dataDir);
+    expect(countAfter).toBe(countBefore);
+
+    // The throwaway branch must be cleaned up.
+    const branches = await $`${DOLT_BIN} --data-dir ${dataDir} branch -a`.quiet().nothrow();
+    expect(branches.stdout.toString()).not.toContain('_deltix_pull_');
+  });
 });

@@ -728,65 +728,122 @@ export class VersioningLocalService {
     }
     const binaryPath = await this.deps.binaryManager.ensureInstalled();
     await this.ensureLocalRepo(binaryPath, dataDir, id.repo);
-    await this.checkoutBranch(binaryPath, dataDir, branch);
+
+    // Atomic pull: apply every commit on a throwaway branch, then advance the
+    // real branch in one step only if the whole apply succeeded. If any commit
+    // or table import fails mid-way we drop the temp branch and restore the
+    // working tree, so a failed pull never leaves partially-applied data or a
+    // corrupted working copy behind (previously a per-table TRUNCATE + reload
+    // on the real branch could destroy uncommitted rows before discovering a
+    // later commit was un-appliable).
+    const baseHead = await this.readBranchHash(binaryPath, dataDir, branch);
+    const tempBranch = `_deltix_pull_${Math.random().toString(36).slice(2)}`;
+
+    const create = await runDoltCommand(
+      binaryPath,
+      ['--data-dir', dataDir, 'branch', tempBranch, baseHead ?? ''],
+      { timeoutMs: TIMEOUT.DOLT_BRANCH },
+    );
+    if (create.exitCode !== 0) {
+      throw new PushError('branch', create.stderr.trim() || create.stdout.trim());
+    }
+    const checkout = await runDoltCommand(
+      binaryPath,
+      ['--data-dir', dataDir, 'checkout', tempBranch],
+      { timeoutMs: TIMEOUT.DOLT_BRANCH },
+    );
+    if (checkout.exitCode !== 0) {
+      throw new PushError('checkout', checkout.stderr.trim() || checkout.stdout.trim());
+    }
+
+    const restore = async (): Promise<void> => {
+      // Leave the temp branch and return to the real branch, restoring its
+      // working tree. From the (now-deleted) temp branch the checkout reflects
+      // the real branch's committed state; if the real branch was only
+      // advanced on the success path, an abort goes back to the original head.
+      const back = await runDoltCommand(binaryPath, ['--data-dir', dataDir, 'checkout', branch], {
+        timeoutMs: TIMEOUT.DOLT_BRANCH,
+      });
+      if (back.exitCode !== 0) {
+        throw new PushError('checkout', back.stderr.trim() || back.stdout.trim());
+      }
+      // Best-effort cleanup of the throwaway branch.
+      await runDoltCommand(binaryPath, ['--data-dir', dataDir, 'branch', '-D', tempBranch], {
+        timeoutMs: TIMEOUT.DOLT_BRANCH,
+      }).catch(() => {});
+    };
 
     // Idempotent apply: skip commits we've already recreated locally for this
-    // branch. This matters when the server degrades to a full-history
-    // re-sync (its `from` negotiation hash was no longer reachable) and
-    // resends commits we already applied — without this guard we'd recreate
-    // them as divergent duplicates. We can't detect that by comparing against
-    // *local* Dolt commit hashes: Dolt's commit hash is content-addressed and
-    // folds in the commit timestamp, so replaying the same change at a later
-    // wall-clock time always produces a different local hash than the
-    // server's original one. Instead we persist the set of server-assigned
-    // hashes already applied, alongside the local repo.
+    // branch. This matters when the server degrades to a full-history re-sync
+    // (its `from` negotiation hash was no longer reachable) and resends commits
+    // we already applied — without this guard we'd recreate them as divergent
+    // duplicates. We can't detect that by comparing against *local* Dolt commit
+    // hashes (content-addressed, folds in the timestamp) so we persist the set
+    // of server-assigned hashes already applied instead.
     const appliedPath = this.appliedCommitsPath(dataDir, branch);
     const applied = await this.readAppliedHashes(appliedPath);
     const pending = commits.filter((c) => !c.hash || !applied.has(c.hash));
 
-    for (const commit of pending) {
-      for (const table of commit.tables) {
-        await this.importTable(binaryPath, dataDir, table);
-      }
-      const names = commit.tables.map((t) => t.name);
-      if (names.length === 0) {
+    try {
+      for (const commit of pending) {
+        for (const table of commit.tables) {
+          await this.importTable(binaryPath, dataDir, table);
+        }
+        const names = commit.tables.map((t) => t.name);
+        if (names.length === 0) {
+          if (commit.hash) applied.add(commit.hash);
+          continue;
+        }
+        const add = await runDoltCommand(binaryPath, ['--data-dir', dataDir, 'add', ...names], {
+          timeoutMs: TIMEOUT.DOLT_COMMIT,
+        });
+        if (add.exitCode !== 0) {
+          throw new PushError('add', add.stderr);
+        }
+        const safeAuthor = sanitizeAuthor(commit.author);
+        const commitResult = await runDoltCommand(
+          binaryPath,
+          [
+            '--data-dir',
+            dataDir,
+            'commit',
+            '-m',
+            commit.message,
+            `--author=${safeAuthor} <${safeAuthor}@deltix.local>`,
+          ],
+          { timeoutMs: TIMEOUT.DOLT_COMMIT },
+        );
+        if (commitResult.exitCode !== 0) {
+          throw new PushError('commit', commitResult.stderr.trim() || commitResult.stdout.trim());
+        }
         if (commit.hash) applied.add(commit.hash);
-        continue;
       }
-      const add = await runDoltCommand(binaryPath, ['--data-dir', dataDir, 'add', ...names], {
-        timeoutMs: TIMEOUT.DOLT_COMMIT,
-      });
-      if (add.exitCode !== 0) {
-        throw new PushError('add', add.stderr);
+
+      if (pending.length > 0) {
+        await this.writeAppliedHashes(appliedPath, applied);
       }
-      const safeAuthor = sanitizeAuthor(commit.author);
-      const commitResult = await runDoltCommand(
+
+      const tempHead = await this.readBranchHash(binaryPath, dataDir, tempBranch);
+      if (!tempHead) {
+        throw new PushError('log', 'could not resolve temp branch head after apply');
+      }
+      // Advance the real branch to the fully-applied temp head in one step.
+      const advance = await runDoltCommand(
         binaryPath,
-        [
-          '--data-dir',
-          dataDir,
-          'commit',
-          '-m',
-          commit.message,
-          `--author=${safeAuthor} <${safeAuthor}@deltix.local>`,
-        ],
-        { timeoutMs: TIMEOUT.DOLT_COMMIT },
+        ['--data-dir', dataDir, 'branch', '-f', branch, tempHead],
+        { timeoutMs: TIMEOUT.DOLT_BRANCH },
       );
-      if (commitResult.exitCode !== 0) {
-        throw new PushError('commit', commitResult.stderr.trim() || commitResult.stdout.trim());
+      if (advance.exitCode !== 0) {
+        throw new PushError('branch', advance.stderr.trim() || advance.stdout.trim());
       }
-      if (commit.hash) applied.add(commit.hash);
+      await restore();
+      return tempHead;
+    } catch (err) {
+      // Restore the real branch's working tree (checkout) and drop the temp
+      // branch so the repo is exactly as it was before the pull attempt.
+      await restore().catch(() => {});
+      throw err;
     }
-
-    if (pending.length > 0) {
-      await this.writeAppliedHashes(appliedPath, applied);
-    }
-
-    const head = await this.readBranchHash(binaryPath, dataDir, branch);
-    if (!head) {
-      throw new PushError('log', 'could not resolve branch head after apply');
-    }
-    return head;
   }
 
   /** Sidecar file path tracking server-assigned commit hashes already applied to `branch`. */
@@ -863,6 +920,30 @@ export class VersioningLocalService {
           }
         } finally {
           await rm(tmp, { force: true });
+        }
+      }
+
+      // `dolt table import` does not carry the source's AUTO_INCREMENT counter
+      // initializer. The CREATE TABLE (with e.g. `AUTO_INCREMENT=6`) sets it,
+      // but the bulk import rewrites the table and the counter reverts — so the
+      // next plain INSERT that omits the PK starts from 1 and collides with
+      // rows imported with explicit PKs. Re-assert the source's declared
+      // `AUTO_INCREMENT=N` after loading, matching the origin's next-PK value.
+      const autoIncrement = /AUTO_INCREMENT=(\d+)/i.exec(table.schema)?.[1];
+      if (autoIncrement) {
+        const fixAi = await runDoltCommand(
+          binaryPath,
+          [
+            '--data-dir',
+            dataDir,
+            'sql',
+            '-q',
+            `ALTER TABLE ${table.name} AUTO_INCREMENT = ${autoIncrement}`,
+          ],
+          { timeoutMs: TIMEOUT.DOLT_COMMIT },
+        );
+        if (fixAi.exitCode !== 0) {
+          throw new PushError(`auto_increment ${table.name}`, fixAi.stderr.trim());
         }
       }
 
