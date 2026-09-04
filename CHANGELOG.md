@@ -9,6 +9,54 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.8.12] - 2026-09-04
+
+**In plain terms:** the "self-heal your branch settings" fix from 0.8.9 had
+a hidden requirement that was never actually true in practice: it only
+worked while a specific background database process happened to be
+running. In the real world that process usually isn't running when you
+type `deltix pull`, so the self-heal silently never kicked in — the CLI
+kept quietly trusting old, incorrect branch settings indefinitely, even
+though it looked like it should have fixed itself. Fixed: the CLI now has
+a second, reliable way to figure out your real current branch that doesn't
+depend on that background process being up, so the self-heal from 0.8.9
+finally works the way it was supposed to from the start.
+
+### Fixed
+
+- **`reconcileBranch()` (the v0.8.9 self-heal for stale
+  `.deltix/config.toml` branch values) was silently inert whenever the
+  local embedded Dolt server wasn't already running** — which, per the
+  user's real-world testing on issue #57, is apparently the common case
+  for `deltix pull`/`fetch`. `getCurrentBranch()` only ever tried the MySQL
+  wire protocol against a running `dolt sql-server` and returned `null`
+  unconditionally on any connection failure, with no fallback — so
+  `reconcileBranch()` always fell back to the (possibly stale) persisted
+  config branch, defeating the whole point of the fix. Confirmed via a
+  real repro: `deltix pull` reported `branch: main` and `head: -` for a
+  user who was actually on `sync-develop-base`, because `main` had been
+  deleted locally and the client was silently still trying to operate on
+  it.
+- `getCurrentBranch()` now falls back to parsing `dolt branch -a` via the
+  CLI (mirroring the fast-path/fallback split `listBranches()` already
+  used) whenever the sql-server isn't reachable, so the actual checked-out
+  branch is found either way.
+
+### Tests
+
+- New integration test
+  (`tests/integration/versioning-local/get-current-branch.integration.test.ts`,
+  real `dolt` binary, no sql-server started) verifies `getCurrentBranch()`
+  correctly reports the checked-out branch through the CLI fallback path,
+  both on `main` and after switching to another branch — and returns
+  `null` for a repo with no local data dir. Full unit suite (136 tests)
+  passes; typecheck shows no new errors. Two pre-existing, unrelated
+  integration-test flakiness issues (real-Dolt-binary timing/cleanup races
+  in `apply-commits-idempotency.integration.test.ts`, and a Bun shell
+  quoting issue in `push-pull-roundtrip.integration.test.ts`) were
+  confirmed present on `main` before this change too, via `git stash`
+  comparison, and are unrelated to this fix.
+
 ## [0.8.11] - 2026-09-04
 
 **In plain terms:** when `pull`/`fetch` say "already up to date", there was

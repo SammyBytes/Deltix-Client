@@ -573,6 +573,18 @@ export class VersioningLocalService {
     return { fastForward: true, conflicts: 0 };
   }
 
+  /**
+   * Resolves the actually-checked-out branch, preferring the live sql-server
+   * (so we see whatever `CALL DOLT_CHECKOUT` via MySQL just set) and falling
+   * back to the CLI's `dolt branch -a` (parsing the `*`-prefixed line) when
+   * no server is reachable — mirroring `listBranches()`'s fast-path/fallback
+   * split. Without this fallback, `getCurrentBranch()` silently returned
+   * `null` whenever the local embedded server wasn't running at the moment
+   * `deltix pull`/`fetch` called it, which meant `reconcileBranch()` (added
+   * in v0.8.9) never actually fired for callers running with the server
+   * stopped — the exact case that matters most, since a stale `main` in
+   * `.deltix/config.toml` would then keep being trusted forever (issue #57).
+   */
   async getCurrentBranch(id: LocalServerIdentity): Promise<string | null> {
     try {
       const mysql = await import('mysql2/promise');
@@ -586,7 +598,29 @@ export class VersioningLocalService {
       const [rows] = await conn.query('SELECT active_branch() AS b');
       await conn.end();
       const b = (rows as Array<Record<string, string>>)[0]?.b ?? null;
-      return b ? String(b) : null;
+      if (b) return String(b);
+    } catch {
+      // Server not running / not reachable — fall through to the CLI.
+    }
+    try {
+      let dataDir = computeLocalDataDir(this.deps.homeDir, id);
+      if (!existsSync(dataDir)) {
+        const fallback = await this.findDataDirForRepo(id.repo);
+        if (!fallback) return null;
+        dataDir = fallback;
+      }
+      const binaryPath = await this.deps.binaryManager.ensureInstalled();
+      const result = await runDoltCommand(binaryPath, ['--data-dir', dataDir, 'branch', '-a'], {
+        timeoutMs: TIMEOUT.DOLT_BRANCH,
+      });
+      if (result.exitCode !== 0) return null;
+      for (const raw of result.stdout.split('\n')) {
+        const line = raw.trimEnd();
+        if (!line.startsWith('*')) continue;
+        const name = line.replace(/^[*]\s+/, '').trim();
+        return name || null;
+      }
+      return null;
     } catch {
       return null;
     }
