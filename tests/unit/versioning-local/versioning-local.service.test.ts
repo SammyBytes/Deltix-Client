@@ -1,7 +1,7 @@
+import { describe, expect, it } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'bun:test';
 import type { BinaryManager } from '../../../src/contexts/binary-manager';
 import {
   CommitDataDirNotFoundError,
