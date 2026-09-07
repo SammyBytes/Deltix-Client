@@ -150,7 +150,13 @@ export class VersioningLocalService {
       throw new CommitError('add', addResult.stderr);
     }
 
-    const commitHash = await this.runDoltCommit(binaryPath, dataDir, id, message, options.authorName);
+    const commitHash = await this.runDoltCommit(
+      binaryPath,
+      dataDir,
+      id,
+      message,
+      options.authorName,
+    );
     return { commitHash, repo: id.repo };
   }
 
@@ -200,7 +206,13 @@ export class VersioningLocalService {
       }
     }
 
-    const commitHash = await this.runDoltCommit(binaryPath, dataDir, id, message, options.authorName);
+    const commitHash = await this.runDoltCommit(
+      binaryPath,
+      dataDir,
+      id,
+      message,
+      options.authorName,
+    );
     return { commitHash, repo: id.repo, schemaTables, dataOnlyTables };
   }
 
@@ -251,9 +263,13 @@ export class VersioningLocalService {
         reset.push(table);
         continue;
       }
-      const checkout = await runDoltCommand(binaryPath, ['--data-dir', dataDir, 'checkout', table], {
-        timeoutMs: TIMEOUT.DOLT_BRANCH,
-      });
+      const checkout = await runDoltCommand(
+        binaryPath,
+        ['--data-dir', dataDir, 'checkout', table],
+        {
+          timeoutMs: TIMEOUT.DOLT_BRANCH,
+        },
+      );
       if (checkout.exitCode !== 0) {
         throw new PushError('checkout', checkout.stderr.trim() || checkout.stdout.trim());
       }
@@ -369,14 +385,22 @@ export class VersioningLocalService {
       `INSERT INTO ${tmpQuoted} (${cols}) SELECT ${cols} FROM ${quoted} AS OF 'HEAD'`,
       `DROP TABLE ${quoted}; RENAME TABLE ${tmpQuoted} TO ${quoted}`,
     ];
-    const result = await runDoltCommand(binaryPath, ['--data-dir', dataDir, 'sql', '-q', statements.join('; ')], {
-      timeoutMs: TIMEOUT.DOLT_COMMIT,
-    });
+    const result = await runDoltCommand(
+      binaryPath,
+      ['--data-dir', dataDir, 'sql', '-q', statements.join('; ')],
+      {
+        timeoutMs: TIMEOUT.DOLT_COMMIT,
+      },
+    );
     if (result.exitCode !== 0) {
       // Leave no half-rebuilt table behind.
-      await runDoltCommand(binaryPath, ['--data-dir', dataDir, 'sql', '-q', `DROP TABLE IF EXISTS ${tmpQuoted}`], {
-        timeoutMs: TIMEOUT.DOLT_BRANCH,
-      }).catch(() => {});
+      await runDoltCommand(
+        binaryPath,
+        ['--data-dir', dataDir, 'sql', '-q', `DROP TABLE IF EXISTS ${tmpQuoted}`],
+        {
+          timeoutMs: TIMEOUT.DOLT_BRANCH,
+        },
+      ).catch(() => {});
       throw new CommitError('rebuild', result.stderr.trim() || result.stdout.trim());
     }
   }
@@ -389,7 +413,15 @@ export class VersioningLocalService {
   ): Promise<string[]> {
     const result = await runDoltCommand(
       binaryPath,
-      ['--data-dir', dataDir, 'sql', '-q', `SHOW COLUMNS FROM ${quoteDoltIdentifier(table)} AS OF 'HEAD'`, '-r', 'csv'],
+      [
+        '--data-dir',
+        dataDir,
+        'sql',
+        '-q',
+        `SHOW COLUMNS FROM ${quoteDoltIdentifier(table)} AS OF 'HEAD'`,
+        '-r',
+        'csv',
+      ],
       { timeoutMs: TIMEOUT.DOLT_BRANCH },
     );
     if (result.exitCode !== 0) {
