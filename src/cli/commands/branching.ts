@@ -5,6 +5,7 @@ import {
   RepoNotFoundError,
   VersioningAuthenticationError,
 } from '../../contexts/versioning';
+import { checkoutBranchLocalFirst } from '../helpers/checkout-branch';
 import { handleSyncError } from '../helpers/handle-sync-error';
 import { handleVersioningError } from '../helpers/handle-versioning-error';
 import { newLocalService } from '../helpers/newLocalService';
@@ -85,8 +86,12 @@ export async function runCheckout(args: string[]): Promise<number> {
   }
   try {
     const local = await newLocalService();
-    await local.checkout(identity, b);
-    printSuccess(`Checked out ${b} in ${identity.repo}`);
+    // Local-first DWIM: existing branch → switch; origin/<branch> → create
+    // at that ref; server-only branch → fetch + materialize + check out
+    // (fixes "remote branch without local branch", issue #57), then create
+    // at the current head as a last resort.
+    const source = await checkoutBranchLocalFirst(identity, b, local);
+    printSuccess(`Checked out ${b} in ${identity.repo}`, { source });
     return 0;
   } catch (err) {
     return handleSyncError(err, 'Checkout failed');

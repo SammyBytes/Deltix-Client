@@ -471,15 +471,17 @@ export class VersioningLocalService {
       try {
         await svc.stop(id);
       } catch {}
-      const result = await runDoltCommand(binaryPath, ['--data-dir', dataDir, 'checkout', branch], {
-        timeoutMs: TIMEOUT.DOLT_BRANCH,
-      });
-      // Restart even if checkout failed, to not leave the DB down
       try {
-        await svc.start(id);
-      } catch {}
-      if (result.exitCode !== 0)
-        throw new PushError('checkout', result.stderr.trim() || result.stdout.trim());
+        // Route through the DWIM-aware checkout so a missing local branch is
+        // created from `origin/<branch>` (not the current head) even while the
+        // sql-server holds the DB in memory.
+        await this.checkoutBranch(binaryPath, dataDir, branch);
+      } finally {
+        // Restart even if checkout failed, to not leave the DB down
+        try {
+          await svc.start(id);
+        } catch {}
+      }
       return;
     }
 
@@ -838,7 +840,15 @@ export class VersioningLocalService {
       await this.assertNoUncommittedChanges(binaryPath, dataDir, touched);
     }
 
-    const baseHead = await this.readBranchHash(binaryPath, dataDir, branch);
+    let baseHead = await this.readBranchHash(binaryPath, dataDir, branch);
+    if (!baseHead) {
+      // The target branch has never been materialized locally (e.g. checking
+      // out a branch that only exists on the server). Bootstrap the replay
+      // from the repo's root commit — the same base `deltix clone` uses — so
+      // a full-history pull recreates the branch as a fresh line of commits
+      // that can then be DWIM-checked out from origin/<branch>.
+      baseHead = await this.readRootHash(binaryPath, dataDir);
+    }
     const tempBranch = `_deltix_pull_${Math.random().toString(36).slice(2)}`;
 
     const create = await runDoltCommand(
@@ -1097,13 +1107,19 @@ export class VersioningLocalService {
     if (checkout.exitCode === 0) {
       return;
     }
-    // Branch does not exist yet (e.g. first `fetch` materializing origin/<branch>):
-    // create it at the current head.
-    const create = await runDoltCommand(
-      binaryPath,
-      ['--data-dir', dataDir, 'checkout', '-b', branch],
-      { timeoutMs: TIMEOUT.DOLT_BRANCH },
-    );
+    // Branch does not exist locally. Git-style DWIM: if `origin/<branch>` is
+    // materialized (a previous fetch/pull/push of this branch), create the
+    // local branch AT that ref — not at the current head. Creating it at the
+    // current head is what produces the "remote branch without local branch"
+    // divide (issue #57): the branch would then diverge from its remote
+    // counterpart on the next push. The legacy current-head create is kept
+    // only for the case where the branch exists nowhere on the machine.
+    const originRef = remoteRefName(branch);
+    const originHash = await this.readBranchHash(binaryPath, dataDir, originRef);
+    const args = originHash ? ['checkout', '-b', branch, originRef] : ['checkout', '-b', branch];
+    const create = await runDoltCommand(binaryPath, ['--data-dir', dataDir, ...args], {
+      timeoutMs: TIMEOUT.DOLT_BRANCH,
+    });
     if (create.exitCode !== 0) {
       throw new PushError('checkout', create.stderr.trim() || create.stdout.trim());
     }
@@ -1290,6 +1306,17 @@ export class VersioningLocalService {
       binaryPath,
       dataDir,
       'SELECT commit_hash FROM dolt_log ORDER BY commit_order DESC LIMIT 1',
+    );
+    return rows[0]?.commit_hash ?? null;
+  }
+
+  /** Root commit of the repo (the `dolt init` commit), reachable from any
+   * branch. Used to bootstrap an apply onto a never-materialized branch. */
+  private async readRootHash(binaryPath: string, dataDir: string): Promise<string | null> {
+    const rows = await this.queryLog(
+      binaryPath,
+      dataDir,
+      'SELECT commit_hash FROM dolt_log ORDER BY commit_order ASC LIMIT 1',
     );
     return rows[0]?.commit_hash ?? null;
   }

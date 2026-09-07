@@ -5,6 +5,8 @@ import {
   RepoNotFoundError,
   VersioningAuthenticationError,
 } from '../../contexts/versioning';
+import { CommitDataDirNotFoundError } from '../../contexts/versioning-local';
+import { checkoutBranchLocalFirst } from '../helpers/checkout-branch';
 import { handleVersioningError } from '../helpers/handle-versioning-error';
 import { newLocalService } from '../helpers/newLocalService';
 import {
@@ -89,24 +91,32 @@ export async function runBranch(args: string[]): Promise<number> {
           'Usage: deltix branch create <repo> <name>',
         );
         if (!params) return 1;
+        const identity = await resolveServerIdentity(params.repo);
+        if (!identity) return 1;
+        const local = await newLocalService();
+        // Local-first (git-style): `deltix branch create` creates only the
+        // local branch; the remote branch is created on the first `deltix
+        // push`. Fall back to a server-only create when the repo has no local
+        // data dir (has never been cloned/pulled on this machine).
         try {
-          const branch = await service.createBranch(params.repo, params.name);
-          printSuccess(`Branch created in ${params.repo}`, {
-            current: branch.currentBranch,
-            created: branch.createdBranch,
-          });
+          await local.createBranch(identity, params.name);
+          printSuccess(`Branch created locally in ${params.repo}`, { branch: params.name });
+          printInfo(`Run \`deltix push ${params.repo}\` to publish it to the server.`);
           return 0;
         } catch (err) {
-          const fb = await tryLocalFallback(err, async () => {
-            const identity = await resolveServerIdentity(params.repo);
-            if (!identity) return 1;
-            const local = await newLocalService();
-            await local.createBranch(identity, params.name);
-            printSuccess(`Branch created locally in ${params.repo}`, { branch: params.name });
+          if (!(err instanceof CommitDataDirNotFoundError)) {
+            return handleVersioningError(err, 'Branch command failed');
+          }
+          try {
+            const branch = await service.createBranch(params.repo, params.name);
+            printSuccess(`Branch created in ${params.repo}`, {
+              current: branch.currentBranch,
+              created: branch.createdBranch,
+            });
             return 0;
-          });
-          if (fb !== null) return fb;
-          throw err;
+          } catch (serverErr) {
+            return handleVersioningError(serverErr, 'Branch command failed (server)');
+          }
         }
       }
       case 'checkout': {
@@ -116,25 +126,28 @@ export async function runBranch(args: string[]): Promise<number> {
           'Usage: deltix branch checkout <repo> <name>',
         );
         if (!params) return 1;
+        const identity = await resolveServerIdentity(params.repo);
+        if (!identity) return 1;
+        const local = await newLocalService();
         try {
-          const branch = await service.checkoutBranch(params.repo, params.name);
+          const source = await checkoutBranchLocalFirst(identity, params.name, local, service);
           await persistCheckedOutBranch(params.name);
+          // Best-effort server-side current-branch mirror so `deltix branch
+          // list` keeps showing the `*` marker; never fatal for the
+          // local-first flow. Skipped for a brand-new branch (created only
+          // locally): the remote branch appears on the first push, not here.
+          if (source !== 'created') {
+            try {
+              await service.checkoutBranch(params.repo, params.name);
+            } catch {}
+          }
           printSuccess(`Checked out ${params.repo}`, {
-            current: branch.currentBranch,
+            branch: params.name,
+            source,
           });
           return 0;
         } catch (err) {
-          const fb = await tryLocalFallback(err, async () => {
-            const identity = await resolveServerIdentity(params.repo);
-            if (!identity) return 1;
-            const local = await newLocalService();
-            await local.checkout(identity, params.name);
-            await persistCheckedOutBranch(params.name);
-            printSuccess(`Checked out locally ${params.repo}`, { branch: params.name });
-            return 0;
-          });
-          if (fb !== null) return fb;
-          throw err;
+          return handleVersioningError(err, 'Branch command failed');
         }
       }
       case 'delete': {

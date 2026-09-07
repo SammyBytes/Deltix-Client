@@ -9,6 +9,66 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.8.14] - 2026-09-07
+
+**In plain terms:** branches are now handled the same way git does — mostly
+on your own computer first, not on the server. Before, creating or checking
+out a branch told the server about it before it existed locally, and if a
+branch existed on the server but not on your machine, the app quietly made
+a "stand-in" local branch in the wrong place, so your work and the server's
+history could drift apart and the next push could get stuck. Now: a branch
+is always created locally first and only appears on the server the first
+time you push it; if you check out a branch that lives only on the server,
+it is downloaded and recreated exactly; and the server side (which shipped
+with Deltix-Server v0.9.3) creates the branch on its end the first time
+you push to it. The "remote branch without local branch" situation that
+started the recent sync incidents is now impossible, and there is no need
+for any manual repair step.
+
+### Added
+- `deltix checkout <branch>` and `deltix branch checkout <repo> <branch>`
+  now fetch-and-materialize a branch that exists only on the server: pull
+  its full history, recreate its tables onto `origin/<branch>` (git fetch),
+  then create the local branch at that ref and switch to it (git DWIM).
+  This is the fix for the "remote branch without local branch" state from
+  issue #57 — the client never needs a manual recovery path to publish.
+- New shared helper `checkout-branch.ts` (`checkoutBranchLocalFirst()`) used
+  by both `deltix checkout` and `deltix branch checkout`.
+
+### Fixed
+- **`deltix checkout` used to create a missing local branch at the wrong
+  commit.** `VersioningLocalService.checkoutBranch()` previously created a
+  not-yet-existing branch with `dolt checkout -b <branch>`, which starts at
+  the *current* head. When `origin/<branch>` had already been materialized
+  (a previous fetch/pull/push of that branch), the new local branch
+  diverged from its remote from the very first commit — reproducing the
+  remote-vs-local drift. It now does git-style DWIM: if `origin/<branch>`
+  exists it runs `dolt checkout -b <branch> origin/<branch>`, and only
+  falls back to the current-head create when the branch exists nowhere on
+  the machine. The same DWIM is used by the "sql-server is running" branch
+  of `checkout()` (the server is stopped, checkout runs, restarted).
+- **`deltix branch create` was server-first.** It created the branch on the
+  server and only fell back to a local create when the server was
+  unreachable — the very flow that left a branch existing remotely with no
+  local counterpart. It is now local-first (git-style): only the local
+  branch is created, and the message points at `deltix push` to publish it.
+  A server-only create remains as a fallback only when the repo has never
+  been cloned/pulled locally (no local data dir).
+- **Applying a pull onto a branch that had never existed locally failed.**
+  `applyCommits()` passed the missing branch head to `dolt branch` and hit
+  a dolt "invalid usage" error. It now bootstraps the replay from the
+  repo's root commit — the same base `deltix clone` starts from — so a
+  full-history pull onto a fresh `origin/<branch>` re-creates the branch as
+  a clean line of commits that can then be DWIM-checked out.
+
+### Tests
+- New integration tests (real dolt, guarded) prove both fixes: (1) DWIM
+  `checkout` creates the local branch at `origin/<branch>`'s head rather
+  than the current head — the exact divergence scenario from issue #57; (2)
+  a full-history `applyCommits()` onto a never-materialized branch followed
+  by DWIM checkout yields the correct table rows on the new branch.
+- 143 client unit tests pass; `bun run lint` clean (no errors).
+
 ## [0.8.13] - 2026-09-04
 
 **In plain terms:** when the app noticed your project's saved branch name was
