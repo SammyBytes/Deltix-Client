@@ -27,6 +27,11 @@ export function printInfo(message: string): void {
   consola.info(message);
 }
 
+/** Prints a one-line warning message (e.g. data-only tables about to be committed). */
+export function printWarn(message: string): void {
+  consola.warn(message);
+}
+
 /** Prints a user-facing error message. Never used for stack traces/internals. */
 export function printError(message: string): void {
   consola.error(message);

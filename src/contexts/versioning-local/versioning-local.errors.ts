@@ -9,8 +9,8 @@ export class CommitError extends Error {
 }
 
 export class CommitEmptyError extends Error {
-  constructor(repo: string) {
-    super(`Nothing to commit for "${repo}" — no staged changes.`);
+  constructor(repo: string, message?: string) {
+    super(message ?? `Nothing to commit for "${repo}" — no staged changes.`);
     this.name = 'CommitEmptyError';
   }
 }

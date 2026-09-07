@@ -29,6 +29,13 @@ export interface LocalCommitResult {
   repo: string;
 }
 
+export interface LocalSchemaOnlyCommitResult extends LocalCommitResult {
+  /** Tables whose DDL changed and were committed (added/altered/dropped). */
+  schemaTables: string[];
+  /** Tables left uncommitted because their only change was runtime rows. */
+  dataOnlyTables: string[];
+}
+
 export interface LocalCommitTable {
   name: string;
   /** CREATE TABLE DDL (from `dolt schema export`) so the receiving side can
@@ -96,6 +103,11 @@ function remoteRefName(branch: string): string {
   return `origin/${branch}`;
 }
 
+/** Backtick-quotes a Dolt identifier, doubling any embedded backtick. */
+function quoteDoltIdentifier(name: string): string {
+  return `\`${name.replace(/`/g, '``')}\``;
+}
+
 /** Normalizes `dolt_status` rows (MySQL or CLI JSON) into `LocalStatusRow`. */
 function normalizeStatusRows(rows: Array<Record<string, unknown>>): LocalStatusRow[] {
   return rows.map((r) => ({
@@ -138,15 +150,132 @@ export class VersioningLocalService {
       throw new CommitError('add', addResult.stderr);
     }
 
+    const commitHash = await this.runDoltCommit(binaryPath, dataDir, id, message, options.authorName);
+    return { commitHash, repo: id.repo };
+  }
+
+  /**
+   * Schema-only commit (git-style `commit` scoped to DDL changes): stages
+   * every table whose *schema* differs from HEAD (added, altered or dropped
+   * tables — `dolt_schema_diff`) and leaves tables whose only change is data
+   * uncommitted. The committed snapshot therefore carries the schema change
+   * without dragging along the runtime/scratch rows (s_log*, sync_audit_log,
+   * …) that land in the same working set when the app runs directly against
+   * the local engine.
+   *
+   * A table that changed both schema and data is committed whole (it is a
+   * controlled table — the DDL edit is the intent). Added tables are
+   * committed with their schema and initial rows.
+   */
+  async commitSchemaOnly(
+    id: LocalServerIdentity,
+    message: string,
+    options: { authorName?: string } = {},
+  ): Promise<LocalSchemaOnlyCommitResult> {
+    const binaryPath = await this.deps.binaryManager.ensureInstalled();
+    const dataDir = await this.resolveLocalDataDir(id);
+    await this.ensureLocalRepo(binaryPath, dataDir, id.repo);
+
+    const { schemaTables, dataOnlyTables } = await this.analyzeWorkingSet(binaryPath, dataDir);
+    if (schemaTables.length === 0) {
+      throw new CommitEmptyError(
+        id.repo,
+        `Nothing to commit schema-only for "${id.repo}" — no DDL changes pending. Only row changes are present; use \`deltix commit\` (publishes rows too, with a warning) or \`deltix commit <tables...>\`.`,
+      );
+    }
+
+    const addResult = await runDoltCommand(binaryPath, ['--data-dir', dataDir, 'add', '-A'], {
+      timeoutMs: TIMEOUT.DOLT_COMMIT,
+    });
+    if (addResult.exitCode !== 0) {
+      throw new CommitError('add', addResult.stderr);
+    }
+    // Unstage the purely-data tables so the commit carries only DDL changes.
+    for (const table of dataOnlyTables) {
+      const reset = await runDoltCommand(binaryPath, ['--data-dir', dataDir, 'reset', table], {
+        timeoutMs: TIMEOUT.DOLT_BRANCH,
+      });
+      if (reset.exitCode !== 0) {
+        throw new CommitError('reset', reset.stderr.trim() || reset.stdout.trim());
+      }
+    }
+
+    const commitHash = await this.runDoltCommit(binaryPath, dataDir, id, message, options.authorName);
+    return { commitHash, repo: id.repo, schemaTables, dataOnlyTables };
+  }
+
+  /**
+   * Tables whose working-set change is data-only (no schema diff vs HEAD).
+   * Used by `deltix commit` to warn before a plain `add -A` would publish
+   * runtime rows, and by the schema-only flow to know what to leave staged.
+   */
+  async dataOnlyChanges(id: LocalServerIdentity): Promise<string[]> {
+    const binaryPath = await this.deps.binaryManager.ensureInstalled();
+    const dataDir = await this.resolveLocalDataDir(id);
+    await this.ensureLocalRepo(binaryPath, dataDir, id.repo);
+    const { dataOnlyTables } = await this.analyzeWorkingSet(binaryPath, dataDir);
+    return dataOnlyTables;
+  }
+
+  /**
+   * Reset only the *rows* of the working set, keeping every pending schema
+   * change in place (git's `reset --hard` would also discard DDL work, which
+   * is why this exists). For tables whose schema is unchanged this is a plain
+   * `dolt checkout <table>`; for tables with pending DDL changes the table is
+   * rebuilt onto the HEAD rows (`CREATE TABLE ... LIKE` + `SELECT ... AS OF
+   * 'HEAD'`). Returns the tables whose data was reset.
+   */
+  async resetDataKeepSchema(
+    id: LocalServerIdentity,
+    tables?: string[],
+  ): Promise<{ tables: string[] }> {
+    const binaryPath = await this.deps.binaryManager.ensureInstalled();
+    const dataDir = await this.resolveLocalDataDir(id);
+    await this.ensureLocalRepo(binaryPath, dataDir, id.repo);
+
+    const { schemaTables, dataOnlyTables, alterTables } = await this.analyzeWorkingSet(
+      binaryPath,
+      dataDir,
+    );
+    // `reset --data` can only regress rows for tables that exist both at HEAD
+    // and in the working set: data-only tables (plain `checkout`) and altered
+    // schema+data tables (rebuilt onto the HEAD rows). Added or dropped tables
+    // have no HEAD rows to reset to, so they are left alone.
+    const requested = tables && tables.length > 0 ? tables : [...dataOnlyTables, ...alterTables];
+    const targets = requested.filter((t) => dataOnlyTables.includes(t) || alterTables.includes(t));
+
+    const reset: string[] = [];
+    for (const table of targets) {
+      if (alterTables.includes(table)) {
+        await this.rebuildWithHeadData(binaryPath, dataDir, table);
+        reset.push(table);
+        continue;
+      }
+      const checkout = await runDoltCommand(binaryPath, ['--data-dir', dataDir, 'checkout', table], {
+        timeoutMs: TIMEOUT.DOLT_BRANCH,
+      });
+      if (checkout.exitCode !== 0) {
+        throw new PushError('checkout', checkout.stderr.trim() || checkout.stdout.trim());
+      }
+      reset.push(table);
+    }
+    return { tables: reset };
+  }
+
+  /** Common `dolt commit` + hash-read tail shared by `commit()`/`commitSchemaOnly()`. */
+  private async runDoltCommit(
+    binaryPath: string,
+    dataDir: string,
+    id: LocalServerIdentity,
+    message: string,
+    authorName?: string,
+  ): Promise<string> {
     // `--author` must be a safe identifier-ish string; restrit the name to
     // letters/digits/dot/dash/underscore so it can't smuggle CLI flags or
     // extra args into the dolt invocation (OWASP A03). Falls back to the
     // historical `deltix` literal when no session username is available, so
     // pre-session callers (tests, scripts) keep working unchanged.
-    const safeAuthor = (options.authorName ?? DEFAULT_COMMIT_AUTHOR).replace(
-      /[^A-Za-z0-9_.-]/g,
-      '_',
-    );
+    const safeAuthor = (authorName ?? DEFAULT_COMMIT_AUTHOR).replace(/[^A-Za-z0-9_.-]/g, '_');
     const authorFlag = `${safeAuthor} <${safeAuthor}@deltix.local>`;
 
     // Commit — may fail with exit code 1 if there are no staged changes.
@@ -167,8 +296,111 @@ export class VersioningLocalService {
     if (!commitHash) {
       throw new CommitEmptyError(id.repo);
     }
+    return commitHash;
+  }
 
-    return { commitHash, repo: id.repo };
+  /**
+   * Working-set analysis: which tables have DDL changes (`dolt_schema_diff`
+   * HEAD→WORKING: added+altered+dropped) vs tables whose only change is data.
+   */
+  private async analyzeWorkingSet(
+    binaryPath: string,
+    dataDir: string,
+  ): Promise<{
+    schemaTables: string[];
+    dataOnlyTables: string[];
+    alterTables: string[];
+  }> {
+    const statusRows = normalizeStatusRows(
+      await this.queryRows(
+        binaryPath,
+        dataDir,
+        'SELECT table_name, staged, status FROM dolt_status',
+      ),
+    );
+    const schemaRows = await this.queryRows(
+      binaryPath,
+      dataDir,
+      "SELECT from_table_name AS f, to_table_name AS t FROM dolt_schema_diff('HEAD','WORKING')",
+    );
+    const schemaTables: string[] = [];
+    const alterTables: string[] = [];
+    for (const row of schemaRows) {
+      for (const name of [row.f, row.t]) {
+        if (name && name !== '' && !schemaTables.includes(name)) schemaTables.push(name);
+      }
+      // Altered: present at HEAD (from) AND in the working set (to).
+      // Added (from empty) and dropped (to empty) have no row to regress.
+      if (row.f && row.t) alterTables.push(row.t);
+    }
+    const addedOrDropped = schemaTables.filter((t) => !alterTables.includes(t));
+    const changed: string[] = [];
+    for (const row of statusRows) {
+      const t = row.table;
+      if (t !== '' && !changed.includes(t)) changed.push(t);
+    }
+    const dataOnlyTables = changed.filter(
+      (t) => !schemaTables.includes(t) && !addedOrDropped.includes(t),
+    );
+    return { schemaTables, dataOnlyTables, alterTables };
+  }
+
+  /**
+   * Rebuilds `table` to its current (working) schema but with the HEAD rows —
+   * the `reset --data` primitive for tables that also have pending DDL.
+   * Fails loudly when the HEAD rows cannot map onto the new schema (e.g. a
+   * new NOT NULL column without a default).
+   */
+  private async rebuildWithHeadData(
+    binaryPath: string,
+    dataDir: string,
+    table: string,
+  ): Promise<void> {
+    const quoted = quoteDoltIdentifier(table);
+    const tmp = `${table}__deltix_reset`;
+    const tmpQuoted = quoteDoltIdentifier(tmp);
+    const headCols = await this.tableHeadColumns(binaryPath, dataDir, table);
+    if (headCols.length === 0) {
+      throw new CommitError('rebuild', `table "${table}" has no HEAD columns to reset rows to`);
+    }
+    const cols = headCols.map(quoteDoltIdentifier).join(', ');
+    const statements = [
+      `CREATE TABLE ${tmpQuoted} LIKE ${quoted}`,
+      `INSERT INTO ${tmpQuoted} (${cols}) SELECT ${cols} FROM ${quoted} AS OF 'HEAD'`,
+      `DROP TABLE ${quoted}; RENAME TABLE ${tmpQuoted} TO ${quoted}`,
+    ];
+    const result = await runDoltCommand(binaryPath, ['--data-dir', dataDir, 'sql', '-q', statements.join('; ')], {
+      timeoutMs: TIMEOUT.DOLT_COMMIT,
+    });
+    if (result.exitCode !== 0) {
+      // Leave no half-rebuilt table behind.
+      await runDoltCommand(binaryPath, ['--data-dir', dataDir, 'sql', '-q', `DROP TABLE IF EXISTS ${tmpQuoted}`], {
+        timeoutMs: TIMEOUT.DOLT_BRANCH,
+      }).catch(() => {});
+      throw new CommitError('rebuild', result.stderr.trim() || result.stdout.trim());
+    }
+  }
+
+  /** Column names of `table` as of HEAD, via `SHOW COLUMNS ... AS OF 'HEAD'`. */
+  private async tableHeadColumns(
+    binaryPath: string,
+    dataDir: string,
+    table: string,
+  ): Promise<string[]> {
+    const result = await runDoltCommand(
+      binaryPath,
+      ['--data-dir', dataDir, 'sql', '-q', `SHOW COLUMNS FROM ${quoteDoltIdentifier(table)} AS OF 'HEAD'`, '-r', 'csv'],
+      { timeoutMs: TIMEOUT.DOLT_BRANCH },
+    );
+    if (result.exitCode !== 0) {
+      throw new PushError('sql', result.stderr.trim() || result.stdout.trim());
+    }
+    return result.stdout
+      .trim()
+      .split('\n')
+      .slice(1) // skip the header (Field is the first column)
+      .map((l) => l.split(',')[0] ?? '')
+      .filter(Boolean);
   }
 
   /**

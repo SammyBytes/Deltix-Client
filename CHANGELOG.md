@@ -9,6 +9,31 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.8.16] - 2026-09-07
+
+**In plain terms:** the app keeps its own runtime bookkeeping (log rows,
+sync stamps, scratch tables) inside the same database you publish, so a
+normal "publish my changes" also dragged that bookkeeping up to the server —
+often leaving it as messy half-states that are hard to undo. This release
+separates the two worlds: you can now publish **only the schema** (table
+structures and columns) and leave the runtime rows behind, and you can
+**throw away just the rows** while keeping any schema edits you're working
+on. When a normal publish is about to include runtime-row bookkeeping, the
+app now warns you first so you can choose.
+
+- `deltix commit --schema-only <message>` — publishes only DDL changes
+  (new/changed/dropped tables and columns) and leaves row-only changes
+  uncommitted, so publication no longer ships runtime/scratch rows.
+  New tables are published with their schema and initial rows.
+- `deltix commit <message>` now warns when it's about to publish row changes
+  in data-only tables (runtime/stamp tables), pointing at `--schema-only`
+  or an explicit table list.
+- `deltix reset --data` — discards working-set *rows* and restores them to
+  the last committed snapshot while keeping every pending schema change
+  (unlike `--hard`, which would also wipe structural edits).
+- Added `dolt_add`/`dolt_reset` staging round behind the schema-only flow;
+  no changes to the existing `commit`/`push`/`pull` pipeline for normal use.
+
 ## [0.8.15] - 2026-09-07
 
 **In plain terms:** to publish your changes, you sometimes have to clear away
