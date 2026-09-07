@@ -14,6 +14,7 @@ import { runClone, runFetch, runPull } from './commands/remote';
 import { runStart, runStatus, runStop } from './commands/server';
 import { runSyncPrefs } from './commands/sync-prefs';
 import { runVersion } from './commands/version';
+import { runClean, runReset } from './commands/working-tree';
 import { printLines } from './output';
 
 export async function runCli(argv: string[]): Promise<number> {
@@ -68,10 +69,14 @@ export async function runCli(argv: string[]): Promise<number> {
       return runRoles(rest);
     case 'sync-prefs':
       return runSyncPrefs(rest);
+    case 'reset':
+      return runReset(rest);
+    case 'clean':
+      return runClean(rest);
     default:
       printLines([
         'Deltix-Client versioning parity with Deltix-Server Fase 5',
-        'Usage: deltix <version|configure|init|clone|import|commit|checkout|login|logout|whoami|push|pull|fetch|repo|branch|merge|log|diff|roles|sync-prefs|start|stop|status> [...args]',
+        'Usage: deltix <version|configure|init|clone|import|commit|checkout|login|logout|whoami|push|pull|fetch|repo|branch|merge|log|diff|roles|sync-prefs|reset|clean|start|stop|status> [...args]',
         'When run from a `deltix init`-ed working tree, [<repo>] becomes optional — the cwd project wins.',
         '  deltix configure',
         '  deltix init <repo>',
@@ -97,6 +102,8 @@ export async function runCli(argv: string[]): Promise<number> {
         '  deltix merge [<repo>] <sourceBranch> [targetBranch]',
         '  deltix log [<repo>] [--branch=name|-b name] [--limit=N|-n N]',
         '  deltix diff [<repo> [<from> <to> | <table>]]  (no refs = working-tree diff)',
+        '  deltix reset [<repo>] [--hard]',
+        '  deltix clean [<repo>] [--dry-run|-n]',
         '  deltix roles list [<repo>]',
         '  deltix roles grant [<repo>] <username> <reader|writer|admin>',
         '  deltix roles revoke [<repo>] <username>',

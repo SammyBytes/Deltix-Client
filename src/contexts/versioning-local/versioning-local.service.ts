@@ -73,6 +73,8 @@ export interface LocalBranchList {
   remote: string[];
 }
 
+type MysqlConn = Awaited<ReturnType<typeof import('mysql2/promise').createConnection>>;
+
 export interface VersioningLocalDeps {
   homeDir: string;
   binaryManager: Pick<BinaryManager, 'ensureInstalled'>;
@@ -92,6 +94,15 @@ interface DoltLogRow {
  */
 function remoteRefName(branch: string): string {
   return `origin/${branch}`;
+}
+
+/** Normalizes `dolt_status` rows (MySQL or CLI JSON) into `LocalStatusRow`. */
+function normalizeStatusRows(rows: Array<Record<string, unknown>>): LocalStatusRow[] {
+  return rows.map((r) => ({
+    table: String(r.table_name ?? r.table ?? ''),
+    staged: r.staged === true || r.staged === 1 || String(r.staged) === 'true',
+    status: String(r.status ?? 'modified'),
+  }));
 }
 
 export class VersioningLocalService {
@@ -562,6 +573,159 @@ export class VersioningLocalService {
     });
     if (result.exitCode !== 0)
       throw new PushError('branch', result.stderr.trim() || result.stdout.trim());
+  }
+
+  /**
+   * Git-like reset of the local working set for `id.repo`.
+   *
+   * - `hard: true`  — discards every uncommitted change to tracked tables and
+   *   reverts the working tree to the current branch HEAD (`git reset --hard`
+   *   / `dolt reset --hard`). History is never rewritten, only the working set
+   *   moves. Untracked new tables are NOT touched — use `cleanWorkingSet()`
+   *   for those (git semantics).
+   * - `hard: false` — unstages staged changes while keeping the working values
+   *   in place (`git reset` / `dolt reset` — mixed).
+   *
+   * Prefers the live sql-server session (`CALL DOLT_RESET`) so the in-memory
+   * working set the app sees is the one reset. Unlike `dolt checkout`, the CLI
+   * `dolt reset` is NOT blocked while a server runs (verified on dolt 2.3.1),
+   * so the CLI fallback works with or without a server — no stop/restart.
+   */
+  async resetWorkingSet(
+    id: LocalServerIdentity,
+    opts: { hard?: boolean } = {},
+  ): Promise<{ tables: string[] }> {
+    const binaryPath = await this.deps.binaryManager.ensureInstalled();
+    const dataDir = await this.resolveLocalDataDir(id);
+    const distinct = (rows: LocalStatusRow[]): string[] =>
+      rows.map((r) => r.table).filter((t, i, self) => t !== '' && self.indexOf(t) === i);
+
+    // Fast path: operate inside the live server session.
+    const conn = await this.tryConnect(id);
+    if (conn) {
+      try {
+        const before = await this.statusRowsViaConn(conn);
+        await conn.query(opts.hard ? `CALL DOLT_RESET('--hard')` : 'CALL DOLT_RESET()');
+        await conn.end();
+        // hard → everything pending is discarded; mixed → only what was staged.
+        const kept = opts.hard
+          ? before.filter((r) => r.status !== 'new table')
+          : before.filter((r) => r.staged);
+        return { tables: distinct(kept) };
+      } catch {
+        try {
+          await conn.end();
+        } catch {}
+      }
+    }
+
+    await this.ensureLocalRepo(binaryPath, dataDir, id.repo);
+    const before = normalizeStatusRows(
+      await this.queryRows(
+        binaryPath,
+        dataDir,
+        'SELECT table_name, staged, status FROM dolt_status',
+      ),
+    );
+    const flags = opts.hard ? ['--hard', 'HEAD'] : [];
+    const result = await runDoltCommand(binaryPath, ['--data-dir', dataDir, 'reset', ...flags], {
+      timeoutMs: TIMEOUT.DOLT_BRANCH,
+    });
+    if (result.exitCode !== 0)
+      throw new PushError('reset', result.stderr.trim() || result.stdout.trim());
+    const kept = opts.hard
+      ? before.filter((r) => r.status !== 'new table')
+      : before.filter((r) => r.staged);
+    return { tables: distinct(kept) };
+  }
+
+  /**
+   * Git-like clean for the local working set: permanently deletes tables that
+   * exist only in the working set (untracked, status 'new table'), leaving
+   * tracked tables and their uncommitted changes untouched (`git clean`).
+   *
+   * With `dryRun: true`, lists the tables that would be deleted without
+   * deleting anything.
+   *
+   * Same server-agnostic strategy as `resetWorkingSet()`: `CALL DOLT_CLEAN()`
+   * on the live session when a server is running, `dolt clean` via CLI
+   * otherwise (neither is blocked by a running server).
+   */
+  async cleanWorkingSet(
+    id: LocalServerIdentity,
+    opts: { dryRun?: boolean } = {},
+  ): Promise<{ tables: string[]; dryRun: boolean }> {
+    const binaryPath = await this.deps.binaryManager.ensureInstalled();
+    const dataDir = await this.resolveLocalDataDir(id);
+    const untracked = (rows: LocalStatusRow[]): string[] =>
+      rows.filter((r) => r.status === 'new table').map((r) => r.table);
+
+    const conn = await this.tryConnect(id);
+    if (conn) {
+      try {
+        const before = await this.statusRowsViaConn(conn);
+        const tables = untracked(before);
+        if (!opts.dryRun) {
+          await conn.query('CALL DOLT_CLEAN()');
+        }
+        await conn.end();
+        return { tables, dryRun: Boolean(opts.dryRun) };
+      } catch {
+        try {
+          await conn.end();
+        } catch {}
+      }
+    }
+
+    await this.ensureLocalRepo(binaryPath, dataDir, id.repo);
+    const before = normalizeStatusRows(
+      await this.queryRows(
+        binaryPath,
+        dataDir,
+        'SELECT table_name, staged, status FROM dolt_status',
+      ),
+    );
+    const tables = untracked(before);
+    if (!opts.dryRun) {
+      const result = await runDoltCommand(binaryPath, ['--data-dir', dataDir, 'clean'], {
+        timeoutMs: TIMEOUT.DOLT_BRANCH,
+      });
+      if (result.exitCode !== 0)
+        throw new PushError('clean', result.stderr.trim() || result.stdout.trim());
+    }
+    return { tables, dryRun: Boolean(opts.dryRun) };
+  }
+
+  private async resolveLocalDataDir(id: LocalServerIdentity): Promise<string> {
+    const dataDir = computeLocalDataDir(this.deps.homeDir, id);
+    if (existsSync(dataDir)) return dataDir;
+    const fallback = await this.findDataDirForRepo(id.repo);
+    if (fallback) return fallback;
+    throw new CommitDataDirNotFoundError(id.repo);
+  }
+
+  private async tryConnect(id: LocalServerIdentity) {
+    if (!(await this.isServerRunning())) return null;
+    try {
+      const { loadEnv } = await import('../../shared/env');
+      const env = loadEnv();
+      const mysql = await import('mysql2/promise');
+      const conn = await mysql.createConnection({
+        host: env.DELTIX_LOCAL_HOST ?? '127.0.0.1',
+        port: Number(env.DELTIX_LOCAL_PORT ?? DEFAULT_DOLT_PORT),
+        user: 'root',
+        database: id.repo,
+        connectTimeout: TIMEOUT.MYSQL_CONNECT_NORMAL,
+      });
+      return conn as MysqlConn;
+    } catch {
+      return null;
+    }
+  }
+
+  private async statusRowsViaConn(conn: MysqlConn): Promise<LocalStatusRow[]> {
+    const [rows] = await conn.query('SELECT table_name, staged, status FROM dolt_status');
+    return normalizeStatusRows(rows as Array<Record<string, unknown>>);
   }
 
   async mergeBranches(

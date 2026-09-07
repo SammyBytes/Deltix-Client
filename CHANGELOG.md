@@ -9,6 +9,52 @@ Each entry starts with a **plain-language summary** (what changed, in
 everyday words) before any technical detail — written so someone outside
 engineering can understand what shipped and why it matters.
 
+## [0.8.15] - 2026-09-07
+
+**In plain terms:** to publish your changes, you sometimes have to clear away
+working data that was never meant to go to the server — for example the
+scratch/runtime rows a database silently accumulates. Before, that meant
+stopping the app and running low-level database commands by hand, which is
+exactly the kind of manual repair steps this project is trying to eliminate.
+Now the app has its own `deltix reset` and `deltix clean` commands, just like
+git: one throws away uncommitted changes to tracked data (with a preview mode
+for the untracked-tables cleaner so you can double-check before anything is
+permanently deleted). No stopping the app, no hand-written database commands.
+
+### Added
+- `deltix reset [<repo>] [--hard]` — git-style working-tree reset on the
+  local Dolt data dir. Mixed (no flag): unstages staged changes while
+  keeping the working values (`dolt reset`). `--hard`: discards every
+  uncommitted change to tracked tables and reverts the working tree to the
+  current branch HEAD (`dolt reset --hard <HEAD>`). Untracked new tables are
+  intentionally left alone (use `deltix clean` for those), matching git.
+- `deltix clean [<repo>] [--dry-run|-n]` — git-style clean: permanently
+  deletes tables that exist only in the working set (untracked, dolt status
+  "new table"), leaving tracked tables and their uncommitted changes
+  untouched. `--dry-run`/`-n` lists the untracked tables that would be
+  deleted without deleting anything.
+- Both commands run against the live local `dolt sql-server` session via the
+  MySQL wire (`CALL DOLT_RESET(...)`, `CALL DOLT_CLEAN()`), so the in-memory
+  working set the app sees is the one that gets reset — no `deltix stop`/
+  `start` dance. Unlike `dolt checkout`, the CLI `dolt reset`/`dolt clean`
+  are not blocked while a server runs (verified on dolt 2.3.1), so the CLI
+  fallback works with or without a server.
+- New service methods `VersioningLocalService.resetWorkingSet()` and
+  `cleanWorkingSet()` (fast-path MySQL → CLI fallback, same pattern as
+  `createBranch`), and a shared `normalizeStatusRows()` helper.
+
+### Tests
+- New integration tests (real dolt, guarded) cover the four behaviors: hard
+  reset discards tracked changes but not untracked tables; mixed reset
+  unstages while keeping working values; `clean` deletes untracked tables
+  and leaves tracked working changes untouched; `clean --dry-run` lists
+  without deleting. A fifth case asserts a hard reset on a clean repo
+  reports no tables.
+- 148 client unit tests pass (143 previous + 5 new); `bun run lint` clean
+  (no errors). Manually smoke-tested the CLI end-to-end: `deltix clean
+  --dry-run` → `deltix reset --hard` → `deltix clean` leaves a "working tree
+  clean" repo with only the intended table.
+
 ## [0.8.14] - 2026-09-07
 
 **In plain terms:** branches are now handled the same way git does — mostly
